@@ -1,0 +1,20 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# .NET build artifacts
+**/bin/
+**/obj/
+
+# Local user save exports & seasonal data
+scouting/seasons/
+scouting/app/data/
+*.csv
+*.fm
+*.log
+*.tmp
+
+# macOS
+.DS_Store

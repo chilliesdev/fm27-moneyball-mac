@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>FM27 — Moneyball Scout</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="crest" id="club-crest" aria-hidden="true">FM</span>
+      <div>
+        <h1 id="club-title">FM27 — Moneyball Scout</h1>
+        <p class="subtitle" id="save-meta">FM27 · Stats-Only (No Attributes/CA/PA)</p>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <label class="top-select">
+        <span>Season</span>
+        <select id="f-season" aria-label="Select archived season"></select>
+      </label>
+      <label class="top-select">
+        <span>Save</span>
+        <select id="f-save" aria-label="Select FM27 save file"></select>
+      </label>
+      <button type="button" id="btn-refresh-save" class="btn secondary">
+        Refresh Save
+      </button>
+      <button type="button" id="btn-shortlist-view" class="btn secondary">
+        Shortlist (<span id="shortlist-count">0</span>)
+      </button>
+      <button type="button" id="btn-export-csv" class="btn primary">
+        Export Filtered CSV
+      </button>
+    </div>
+  </header>
+
+  <main class="container">
+    <nav class="tabs-bar" aria-label="Position groups">
+      <div id="position-tablist" class="tablist" role="tablist" aria-label="Scout positions">
+        <button type="button" role="tab" id="tab-ST" data-pos="ST" aria-selected="true" tabindex="0">ST</button>
+        <button type="button" role="tab" id="tab-W" data-pos="W" aria-selected="false" tabindex="-1">W / Wide</button>
+        <button type="button" role="tab" id="tab-AM" data-pos="AM" aria-selected="false" tabindex="-1">AM</button>
+        <button type="button" role="tab" id="tab-CM" data-pos="CM" aria-selected="false" tabindex="-1">CM</button>
+        <button type="button" role="tab" id="tab-DM" data-pos="DM" aria-selected="false" tabindex="-1">DM</button>
+        <button type="button" role="tab" id="tab-FB_WB" data-pos="FB_WB" aria-selected="false" tabindex="-1">FB / WB</button>
+        <button type="button" role="tab" id="tab-CB" data-pos="CB" aria-selected="false" tabindex="-1">CB</button>
+        <button type="button" role="tab" id="tab-GK" data-pos="GK" aria-selected="false" tabindex="-1">GK</button>
+      </div>
+    </nav>
+
+    <section class="filters-panel" aria-label="Scouting filters">
+      <div class="filter-grid">
+        <label class="field">
+          <span>Search Player / Club</span>
+          <input type="search" id="f-search" placeholder="Name or club...">
+        </label>
+
+        <label class="field">
+          <span>Min Minutes</span>
+          <select id="f-min-mins">
+            <option value="450">450+</option>
+            <option value="600">600+</option>
+            <option value="900" selected>900+ (Recommended)</option>
+            <option value="1200">1200+</option>
+            <option value="1500">1500+</option>
+            <option value="2000">2000+</option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span>Max Age</span>
+          <select id="f-max-age">
+            <option value="99">Any Age</option>
+            <option value="21">U21 (&le; 21)</option>
+            <option value="23">U23 (&le; 23)</option>
+            <option value="25" selected>&le; 25</option>
+            <option value="27">&le; 27</option>
+            <option value="30">&le; 30</option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span>Max Transfer Value</span>
+          <select id="f-max-val">
+            <option value="999999999">Any Value</option>
+            <option value="1000000">&le; 1M</option>
+            <option value="5000000">&le; 5M</option>
+            <option value="10000000">&le; 10M</option>
+            <option value="15000000" selected>&le; 15M</option>
+            <option value="25000000">&le; 25M</option>
+            <option value="50000000">&le; 50M</option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span>Max Weekly Wage</span>
+          <select id="f-max-wage">
+            <option value="999999999" selected>Any Wage</option>
+            <option value="15000">&le; 15k/wk</option>
+            <option value="30000">&le; 30k/wk</option>
+            <option value="50000">&le; 50k/wk</option>
+            <option value="80000">&le; 80k/wk</option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span>Contract Expiry</span>
+          <select id="f-contract">
+            <option value="all" selected>Any Contract</option>
+            <option value="2028">Expiring 2028</option>
+            <option value="2029">Expiring &le; 2029</option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span>Min Club Reputation</span>
+          <select id="f-min-rep">
+            <option value="0">All Leagues</option>
+            <option value="4500">4,500+ (Solid Pro)</option>
+            <option value="5500" selected>5,500+ (Champ / Top Tier)</option>
+            <option value="6500">6,500+ (Upper Tier)</option>
+            <option value="7500">7,500+ (Elite)</option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span>Role Score</span>
+          <select id="f-role"></select>
+        </label>
+
+        <label class="field">
+          <span>Club Benchmark</span>
+          <select id="f-benchmark"></select>
+        </label>
+
+        <label class="field checkbox-field">
+          <input type="checkbox" id="f-dynamic-pct" checked>
+          <span>Dynamic pool percentiles</span>
+        </label>
+
+        <label class="field checkbox-field">
+          <input type="checkbox" id="f-include-hull" checked>
+          <span>Include managed club</span>
+        </label>
+      </div>
+    </section>
+
+    <section class="scatter-card" aria-label="Per 90 scatter comparison">
+      <div class="scatter-header">
+        <div>
+          <h2>Per-90 Scatter Plot</h2>
+          <p class="scatter-note" id="pool-summary">Loading dataset...</p>
+        </div>
+        <div class="scatter-controls">
+          <label>
+            <span>X Axis</span>
+            <select id="scatter-x"></select>
+          </label>
+          <label>
+            <span>Y Axis</span>
+            <select id="scatter-y"></select>
+          </label>
+        </div>
+      </div>
+      <div class="scatter-wrap">
+        <svg id="scatter-svg" viewBox="0 0 860 320" role="img" aria-label="Player scatter chart"></svg>
+        <div id="scatter-tooltip" class="scatter-tooltip" hidden></div>
+      </div>
+    </section>
+
+    <section class="table-section">
+      <div id="sort-status" role="status" class="sr-only"></div>
+      <div tabindex="0" role="region" aria-labelledby="table-caption" class="table-wrapper">
+        <table id="scouting-table">
+          <caption id="table-caption">Filtered Moneyball Scouting Table (Top 150 shown)</caption>
+          <thead id="table-head"></thead>
+          <tbody id="table-body"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="player-dialog" closedby="any" aria-labelledby="dialog-player-name">
+    <div class="dialog-shell">
+      <header class="dialog-head">
+        <div>
+          <h2 id="dialog-player-name">Player Name</h2>
+          <p id="dialog-player-meta" class="subtitle"></p>
+        </div>
+        <div class="dialog-head-actions">
+          <button type="button" id="dialog-shortlist-btn" class="btn secondary">Shortlist</button>
+          <button type="button" id="dialog-close-btn" class="btn primary" aria-label="Close player profile">Close</button>
+        </div>
+      </header>
+      <div class="dialog-body">
+        <div class="radar-panel">
+          <div class="radar-controls">
+            <label>
+              <span>Compare vs Managed Club</span>
+              <select id="dialog-compare-select"></select>
+            </label>
+          </div>
+          <svg id="radar-svg" viewBox="-40 -10 500 440" role="img" aria-label="Player percentile pizza chart"></svg>
+          <div class="radar-legend" id="radar-legend"></div>
+        </div>
+        <div class="profile-metrics">
+          <h3>Per-90 Output &amp; Percentiles</h3>
+          <div id="dialog-stats-list" class="stats-grid"></div>
+          <div id="dialog-progression-wrap" hidden>
+            <h3 class="progression-heading">Season-by-Season Progression</h3>
+            <div id="dialog-progression-list" class="stats-grid"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="shortlist-dialog" closedby="any" aria-labelledby="shortlist-dialog-title">
+    <div class="dialog-shell shortlist-shell">
+      <header class="dialog-head">
+        <h2 id="shortlist-dialog-title">Saved Shortlist</h2>
+        <div class="dialog-head-actions">
+          <button type="button" id="btn-export-shortlist" class="btn primary">Export Shortlist CSV</button>
+          <button type="button" id="btn-clear-shortlist" class="btn secondary">Clear</button>
+          <button type="button" id="shortlist-close-btn" class="btn secondary">Close</button>
+        </div>
+      </header>
+      <div class="shortlist-body" id="shortlist-body"></div>
+    </div>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>

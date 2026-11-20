@@ -1,0 +1,13 @@
+[project]
+name = "fm27-moneyball-mac"
+version = "1.0.0"
+description = "Mustermann-style Moneyball scouting dashboard, progressive season archiver, and in-game FM27 button mod for macOS Apple Silicon."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.12"
+dependencies = [
+    "fmsave>=0.14.1",
+]
+
+[tool.setuptools.packages.find]
+include = ["scouting*"]
