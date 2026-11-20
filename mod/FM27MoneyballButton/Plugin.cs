@@ -7,6 +7,7 @@ using BepInEx;
 using BepInEx.Logging;
 using BepInEx.Unity.IL2CPP;
 using Il2CppInterop.Runtime.Injection;
+using Il2CppInterop.Runtime.InteropTypes.Arrays;
 using UnityEngine;
 using UnityEngine.UIElements;
 
@@ -118,9 +119,57 @@ public class Plugin : BasePlugin
 
 public class MoneyballButtonBehaviour : MonoBehaviour
 {
+    private const string IconResourceName = "FM27MoneyballButton.moneyball-icon.png";
+    private static Texture2D _cachedIconTexture;
+    private static bool _iconLoadAttempted;
     private float _nextScanTime;
 
     public MoneyballButtonBehaviour(IntPtr ptr) : base(ptr) { }
+
+    private static Texture2D GetOrLoadIconTexture()
+    {
+        if (_cachedIconTexture != null)
+            return _cachedIconTexture;
+        if (_iconLoadAttempted)
+            return null;
+        _iconLoadAttempted = true;
+
+        try
+        {
+            var asm = Assembly.GetExecutingAssembly();
+            using var stream = asm.GetManifestResourceStream(IconResourceName);
+            if (stream == null)
+            {
+                Plugin.Logger.LogWarning($"Embedded icon resource not found: {IconResourceName}");
+                return null;
+            }
+
+            using var ms = new MemoryStream();
+            stream.CopyTo(ms);
+            var bytes = ms.ToArray();
+
+            var tex = new Texture2D(2, 2, TextureFormat.RGBA32, false)
+            {
+                hideFlags = HideFlags.HideAndDontSave,
+                filterMode = FilterMode.Bilinear,
+            };
+
+            if (!ImageConversion.LoadImage(tex, new Il2CppStructArray<byte>(bytes), false))
+            {
+                Plugin.Logger.LogWarning($"ImageConversion.LoadImage failed for {IconResourceName}.");
+                UnityEngine.Object.Destroy(tex);
+                return null;
+            }
+
+            _cachedIconTexture = tex;
+            return _cachedIconTexture;
+        }
+        catch (Exception ex)
+        {
+            Plugin.Logger.LogWarning($"Failed to load Moneyball icon texture: {ex.Message}");
+            return null;
+        }
+    }
 
     private void Update()
     {
@@ -160,24 +209,47 @@ public class MoneyballButtonBehaviour : MonoBehaviour
             var btn = new Button((Action)Plugin.OpenMoneyballDashboard)
             {
                 name = "moneyball-launch-btn",
-                text = "Moneyball",
+                tooltip = "Moneyball Scout",
             };
             btn.pickingMode = PickingMode.Position;
             btn.style.position = Position.Absolute;
             btn.style.right = 18f;
             btn.style.bottom = 18f;
-            btn.style.paddingLeft = 12f;
-            btn.style.paddingRight = 12f;
-            btn.style.paddingTop = 6f;
-            btn.style.paddingBottom = 6f;
-            btn.style.backgroundColor = new StyleColor(new Color(0.96f, 0.62f, 0.04f, 0.95f));
-            btn.style.color = new StyleColor(new Color(0.08f, 0.06f, 0.03f, 1f));
-            btn.style.borderTopLeftRadius = 6f;
-            btn.style.borderTopRightRadius = 6f;
-            btn.style.borderBottomLeftRadius = 6f;
-            btn.style.borderBottomRightRadius = 6f;
-            btn.style.unityFontStyleAndWeight = FontStyle.Bold;
-            btn.style.fontSize = 12f;
+            btn.style.width = 40f;
+            btn.style.height = 40f;
+            btn.style.paddingLeft = 3f;
+            btn.style.paddingRight = 3f;
+            btn.style.paddingTop = 3f;
+            btn.style.paddingBottom = 3f;
+            btn.style.marginLeft = 0f;
+            btn.style.marginRight = 0f;
+            btn.style.marginTop = 0f;
+            btn.style.marginBottom = 0f;
+            btn.style.borderLeftWidth = 0f;
+            btn.style.borderRightWidth = 0f;
+            btn.style.borderTopWidth = 0f;
+            btn.style.borderBottomWidth = 0f;
+            btn.style.justifyContent = Justify.Center;
+            btn.style.alignItems = Align.Center;
+            btn.style.backgroundColor = new StyleColor(new Color(0.06f, 0.08f, 0.12f, 0.94f));
+            btn.style.borderTopLeftRadius = 20f;
+            btn.style.borderTopRightRadius = 20f;
+            btn.style.borderBottomLeftRadius = 20f;
+            btn.style.borderBottomRightRadius = 20f;
+
+            var iconTex = GetOrLoadIconTexture();
+            if (iconTex != null)
+            {
+                var iconImg = new UnityEngine.UIElements.Image
+                {
+                    image = iconTex,
+                    scaleMode = ScaleMode.ScaleToFit,
+                    pickingMode = PickingMode.Ignore,
+                };
+                iconImg.style.width = 32f;
+                iconImg.style.height = 32f;
+                btn.Add(iconImg);
+            }
 
             root.Add(btn);
             btn.BringToFront();

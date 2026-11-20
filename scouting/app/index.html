@@ -5,12 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <title>FM27 — Moneyball Scout</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='15' fill='%23c46b00'/%3E%3Ctext x='16' y='21' font-size='16' font-weight='bold' text-anchor='middle' fill='white' font-family='sans-serif'%3EM%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="vendor/tabulator/tabulator.min.css">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <header class="topbar">
     <div class="brand">
-      <span class="crest" id="club-crest" aria-hidden="true">FM</span>
+      <img class="crest" id="club-crest" src="/api/img/club/?name=FM" alt="" width="40" height="40" decoding="async">
       <div>
         <h1 id="club-title">FM27 — Moneyball Scout</h1>
         <p class="subtitle" id="save-meta">FM27 · Stats-Only (No Attributes/CA/PA)</p>
@@ -54,9 +56,108 @@
     <section class="filters-panel" aria-label="Scouting filters">
       <div class="filter-grid">
         <label class="field">
-          <span>Search Player / Club</span>
-          <input type="search" id="f-search" placeholder="Name or club...">
+          <span>Search Player / Club <kbd class="kbd-hint" aria-hidden="true">/</kbd></span>
+          <input type="search" id="f-search" placeholder="Name or club..." aria-keyshortcuts="/">
         </label>
+
+        <div class="field">
+          <span>Leagues</span>
+          <button type="button" class="multi-trigger" id="btn-f-leagues" popovertarget="pop-leagues" aria-haspopup="listbox" aria-expanded="false" aria-controls="list-leagues">
+            <span class="trigger-label">All Leagues</span>
+            <span class="trigger-badge" hidden>0</span>
+          </button>
+          <div id="pop-leagues" popover="auto" class="filter-popover" data-facet="leagues" data-anchor="btn-f-leagues">
+            <div class="popover-search-wrap">
+              <input type="search" class="popover-search" placeholder="Search leagues..." aria-label="Search leagues">
+            </div>
+            <div class="popover-actions">
+              <span class="popover-hint">Multi-select</span>
+              <button type="button" class="btn-link" data-action="clear-facet" data-facet="leagues">Clear</button>
+            </div>
+            <div id="list-leagues" class="popover-list" role="listbox" aria-multiselectable="true" aria-label="Leagues"></div>
+          </div>
+        </div>
+
+        <div class="field">
+          <span>Clubs</span>
+          <button type="button" class="multi-trigger" id="btn-f-clubs" popovertarget="pop-clubs" aria-haspopup="listbox" aria-expanded="false" aria-controls="list-clubs">
+            <span class="trigger-label">All Clubs</span>
+            <span class="trigger-badge" hidden>0</span>
+          </button>
+          <div id="pop-clubs" popover="auto" class="filter-popover" data-facet="clubs" data-anchor="btn-f-clubs">
+            <div class="popover-search-wrap">
+              <input type="search" class="popover-search" placeholder="Search clubs..." aria-label="Search clubs">
+            </div>
+            <div class="popover-actions">
+              <span class="popover-hint" id="clubs-scope-hint">All leagues</span>
+              <button type="button" class="btn-link" data-action="clear-facet" data-facet="clubs">Clear</button>
+            </div>
+            <div id="list-clubs" class="popover-list" role="listbox" aria-multiselectable="true" aria-label="Clubs"></div>
+          </div>
+        </div>
+
+        <div class="field">
+          <span>Positions</span>
+          <button type="button" class="multi-trigger" id="btn-f-positions" popovertarget="pop-positions" aria-haspopup="listbox" aria-expanded="false" aria-controls="list-positions">
+            <span class="trigger-label">All Positions</span>
+            <span class="trigger-badge" hidden>0</span>
+          </button>
+          <div id="pop-positions" popover="auto" class="filter-popover" data-facet="positions" data-anchor="btn-f-positions">
+            <div class="popover-actions">
+              <span class="popover-hint">Matches any selected</span>
+              <button type="button" class="btn-link" data-action="clear-facet" data-facet="positions">Clear</button>
+            </div>
+            <div id="list-positions" class="popover-list" role="listbox" aria-multiselectable="true" aria-label="Positions"></div>
+          </div>
+        </div>
+
+        <div class="field">
+          <span>Nationality</span>
+          <button type="button" class="multi-trigger" id="btn-f-nations" popovertarget="pop-nations" aria-haspopup="listbox" aria-expanded="false" aria-controls="list-nations">
+            <span class="trigger-label">All Nationalities</span>
+            <span class="trigger-badge" hidden>0</span>
+          </button>
+          <div id="pop-nations" popover="auto" class="filter-popover" data-facet="nations" data-anchor="btn-f-nations">
+            <div class="popover-search-wrap">
+              <input type="search" class="popover-search" placeholder="Search nationalities..." aria-label="Search nationalities">
+            </div>
+            <div class="popover-actions">
+              <span class="popover-hint">Multi-select</span>
+              <button type="button" class="btn-link" data-action="clear-facet" data-facet="nations">Clear</button>
+            </div>
+            <div id="list-nations" class="popover-list" role="listbox" aria-multiselectable="true" aria-label="Nationality"></div>
+          </div>
+        </div>
+
+        <div class="field">
+          <span>Preferred Foot</span>
+          <button type="button" class="multi-trigger" id="btn-f-feet" popovertarget="pop-feet" aria-haspopup="listbox" aria-expanded="false" aria-controls="list-feet">
+            <span class="trigger-label">Any Foot</span>
+            <span class="trigger-badge" hidden>0</span>
+          </button>
+          <div id="pop-feet" popover="auto" class="filter-popover" data-facet="feet" data-anchor="btn-f-feet">
+            <div class="popover-actions">
+              <span class="popover-hint">Multi-select</span>
+              <button type="button" class="btn-link" data-action="clear-facet" data-facet="feet">Clear</button>
+            </div>
+            <div id="list-feet" class="popover-list" role="listbox" aria-multiselectable="true" aria-label="Preferred Foot"></div>
+          </div>
+        </div>
+
+        <div class="field">
+          <span>Status</span>
+          <button type="button" class="multi-trigger" id="btn-f-statuses" popovertarget="pop-statuses" aria-haspopup="listbox" aria-expanded="false" aria-controls="list-statuses">
+            <span class="trigger-label">Any Status</span>
+            <span class="trigger-badge" hidden>0</span>
+          </button>
+          <div id="pop-statuses" popover="auto" class="filter-popover" data-facet="statuses" data-anchor="btn-f-statuses">
+            <div class="popover-actions">
+              <span class="popover-hint">Matches any selected</span>
+              <button type="button" class="btn-link" data-action="clear-facet" data-facet="statuses">Clear</button>
+            </div>
+            <div id="list-statuses" class="popover-list" role="listbox" aria-multiselectable="true" aria-label="Status"></div>
+          </div>
+        </div>
 
         <label class="field">
           <span>Min Minutes</span>
@@ -110,8 +211,6 @@
           <span>Contract Expiry</span>
           <select id="f-contract">
             <option value="all" selected>Any Contract</option>
-            <option value="2028">Expiring 2028</option>
-            <option value="2029">Expiring &le; 2029</option>
           </select>
         </label>
 
@@ -126,10 +225,13 @@
           </select>
         </label>
 
-        <label class="field">
+        <div class="field">
           <span>Role Score</span>
-          <select id="f-role"></select>
-        </label>
+          <div class="role-select-row">
+            <select id="f-role" aria-label="Role Score"></select>
+            <button type="button" id="btn-customize-score" class="btn secondary btn-compact" title="Customize Role Score formula">Customize</button>
+          </div>
+        </div>
 
         <label class="field">
           <span>Club Benchmark</span>
@@ -145,6 +247,11 @@
           <input type="checkbox" id="f-include-hull" checked>
           <span>Include managed club</span>
         </label>
+      </div>
+
+      <div id="active-filters-bar" class="active-filters-bar" hidden>
+        <div id="active-filters-chips" class="active-filters-chips" aria-label="Active filters"></div>
+        <button type="button" id="btn-reset-filters" class="btn secondary btn-compact">Reset Filters</button>
       </div>
     </section>
 
@@ -163,32 +270,42 @@
             <span>Y Axis</span>
             <select id="scatter-y"></select>
           </label>
+          <button type="button" id="btn-export-scatter" class="btn secondary btn-compact">Export PNG</button>
         </div>
       </div>
       <div class="scatter-wrap">
-        <svg id="scatter-svg" viewBox="0 0 860 320" role="img" aria-label="Player scatter chart"></svg>
-        <div id="scatter-tooltip" class="scatter-tooltip" hidden></div>
+        <div id="scatter-chart" class="scatter-chart" role="img" aria-label="Per-90 player scatter chart"></div>
       </div>
     </section>
 
-    <section class="table-section">
-      <div id="sort-status" role="status" class="sr-only"></div>
-      <div tabindex="0" role="region" aria-labelledby="table-caption" class="table-wrapper">
-        <table id="scouting-table">
-          <caption id="table-caption">Filtered Moneyball Scouting Table (Top 150 shown)</caption>
-          <thead id="table-head"></thead>
-          <tbody id="table-body"></tbody>
-        </table>
+    <section class="table-section" aria-label="Scouting results table">
+      <div class="table-toolbar">
+        <div>
+          <h2 id="table-caption">Filtered Moneyball Scouting Table</h2>
+          <p class="subtitle" id="table-count-note">Hold Shift + click column headers for multi-column sort</p>
+        </div>
+        <div class="table-toolbar-actions">
+          <button type="button" id="btn-column-chooser" class="btn secondary btn-compact" popovertarget="column-chooser-popover" aria-haspopup="true" aria-expanded="false" aria-controls="column-chooser-popover">Columns</button>
+          <div id="column-chooser-popover" class="filter-popover column-chooser-popover" popover="auto" data-anchor="btn-column-chooser" aria-label="Choose table columns"></div>
+        </div>
       </div>
+      <div id="sort-status" role="status" class="sr-only"></div>
+      <div id="scouting-table" aria-labelledby="table-caption"></div>
     </section>
   </main>
 
   <dialog id="player-dialog" closedby="any" aria-labelledby="dialog-player-name">
     <div class="dialog-shell">
       <header class="dialog-head">
-        <div>
-          <h2 id="dialog-player-name">Player Name</h2>
-          <p id="dialog-player-meta" class="subtitle"></p>
+        <div class="dialog-brand">
+          <img id="dialog-player-img" class="dialog-avatar" src="/api/img/person/?name=?" alt="" width="44" height="44" decoding="async">
+          <div>
+            <h2 id="dialog-player-name">Player Name</h2>
+            <p class="dialog-meta-row">
+              <img id="dialog-club-img" class="dialog-crest" src="/api/img/club/?name=?" alt="" width="20" height="20" decoding="async">
+              <span id="dialog-player-meta" class="subtitle"></span>
+            </p>
+          </div>
         </div>
         <div class="dialog-head-actions">
           <button type="button" id="dialog-shortlist-btn" class="btn secondary">Shortlist</button>
@@ -203,17 +320,83 @@
               <select id="dialog-compare-select"></select>
             </label>
           </div>
-          <svg id="radar-svg" viewBox="-40 -10 500 440" role="img" aria-label="Player percentile pizza chart"></svg>
-          <div class="radar-legend" id="radar-legend"></div>
+          <div id="radar-chart" class="radar-chart" role="img" aria-label="Player percentile radar chart"></div>
         </div>
         <div class="profile-metrics">
           <h3>Per-90 Output &amp; Percentiles</h3>
           <div id="dialog-stats-list" class="stats-grid"></div>
-          <div id="dialog-progression-wrap" hidden>
+          <div id="dialog-progression-wrap">
             <h3 class="progression-heading">Season-by-Season Progression</h3>
-            <div id="dialog-progression-list" class="stats-grid"></div>
+            <p id="dialog-progression-empty" class="subtitle" hidden></p>
+            <div id="progression-chart" class="progression-chart" role="img" aria-label="Season progression chart" hidden></div>
           </div>
         </div>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="score-dialog" closedby="any" aria-labelledby="score-dialog-title">
+    <div class="dialog-shell score-dialog-shell">
+      <header class="dialog-head">
+        <div>
+          <h2 id="score-dialog-title">Customize Role Score</h2>
+          <p id="score-dialog-subtitle" class="subtitle">Build weighted custom formulas from position defaults or the full metric catalog.</p>
+        </div>
+        <div class="dialog-head-actions">
+          <button type="button" id="score-reset-btn" class="btn secondary">Reset to Role</button>
+          <button type="button" id="score-close-btn" class="btn primary">Done</button>
+        </div>
+      </header>
+
+      <div class="score-controls-bar">
+        <label class="field">
+          <span>Calculation Method</span>
+          <select id="score-method">
+            <option value="percentile">Weighted Percentile (0–100)</option>
+            <option value="zscore">Weighted Z-Score (0–100 scaled)</option>
+            <option value="minmax">Weighted Min-Max (0–100)</option>
+          </select>
+        </label>
+        <p id="score-method-hint" class="subtitle score-method-hint"></p>
+
+        <div class="score-preset-bar">
+          <label class="field">
+            <span>Saved Presets (<span id="score-preset-pos">ST</span>)</span>
+            <select id="score-preset-select"></select>
+          </label>
+          <label class="field">
+            <span>Preset Name</span>
+            <input type="text" id="score-preset-name" placeholder="e.g. Pressing Forward...">
+          </label>
+          <div class="score-preset-btns">
+            <button type="button" id="score-save-preset-btn" class="btn primary btn-compact">Save Preset</button>
+            <button type="button" id="score-rename-preset-btn" class="btn secondary btn-compact" disabled>Rename</button>
+            <button type="button" id="score-delete-preset-btn" class="btn secondary btn-compact" disabled>Delete</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="score-dialog-body">
+        <div class="score-builder-panel">
+          <div class="score-builder-toolbar">
+            <input type="search" id="score-metric-search" placeholder="Search 68+ metrics..." aria-label="Search metrics">
+            <select id="score-category-filter" aria-label="Filter metric category"></select>
+            <label class="checkbox-field score-enabled-toggle">
+              <input type="checkbox" id="score-enabled-only">
+              <span>Enabled only</span>
+            </label>
+            <span id="score-total-weight" class="score-total-weight">Total weight: 0.0</span>
+          </div>
+          <div id="score-metrics-list" class="score-metrics-list"></div>
+        </div>
+
+        <aside id="score-preview-panel" class="score-preview-panel" aria-label="Live Top 5 Preview">
+          <div class="score-preview-head">
+            <h3>Live Top 5 Preview</h3>
+            <p class="subtitle" id="score-preview-note">Matching filtered pool</p>
+          </div>
+          <div id="score-preview-list" class="score-preview-list"></div>
+        </aside>
       </div>
     </div>
   </dialog>
@@ -232,6 +415,10 @@
     </div>
   </dialog>
 
+  <div id="toast-region" class="toast-region" popover="manual" role="region" aria-label="Notifications" aria-live="polite" aria-atomic="true"></div>
+
+  <script src="vendor/echarts/echarts.min.js"></script>
+  <script src="vendor/tabulator/tabulator.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
