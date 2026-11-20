@@ -1,4 +1,4 @@
-"""Unified E2E test runner for FM27 Moneyball Scout (Tiers 1-4, 197 opaque-box cases)."""
+"""Unified E2E test runner for FM27 Moneyball Scout (Tiers 1-4)."""
 
 from __future__ import annotations
 

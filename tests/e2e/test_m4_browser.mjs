@@ -294,7 +294,7 @@ function makeTests(baseUrl) {
   const cases = [];
   const add = (id, feature, tier, fn) => cases.push({ id, feature, tier, fn });
 
-  // ==================== F9 BROWSER (5 cases) ====================
+  // ==================== F9 BROWSER (6 cases) ====================
   add("F9-T1-04", "F9", 1, async (browser) => {
     const { context, page, tracker } = await openApp(browser, baseUrl);
     try {
@@ -370,6 +370,32 @@ function makeTests(baseUrl) {
       assert(eIdx >= 0 && tIdx >= 0 && aIdx > eIdx && aIdx > tIdx, `Bad script order: ${JSON.stringify(scripts)}`);
       tracker.assertClean("F9-T2-04");
       return `Script load order valid: ${scripts.join(" -> ")}`;
+    } finally {
+      await context.close();
+    }
+  });
+
+  add("F9-T2-06", "F9", 2, async (browser) => {
+    const staleRequests = [];
+    const { context, page, tracker } = await openApp(browser, baseUrl, {
+      preInitHook: async (pg) => {
+        await pg.route(/\/(?:app\.js|styles\.css)$/, async (route) => {
+          const pathname = new URL(route.request().url()).pathname;
+          staleRequests.push(pathname);
+          const isScript = pathname === "/app.js";
+          await route.fulfill({
+            contentType: isScript ? "application/javascript" : "text/css",
+            body: isScript ? 'document.querySelector("#pool-summary").textContent = "Legacy Scout script";' : "",
+          });
+        });
+      },
+    });
+    try {
+      await findTabulator(page);
+      await getScatterCanvas(page);
+      assert(staleRequests.length === 0, `Dashboard requested legacy asset URLs: ${staleRequests.join(", ")}`);
+      tracker.assertClean("F9-T2-06");
+      return "Dashboard bypassed legacy asset URLs and rendered the table and chart";
     } finally {
       await context.close();
     }
