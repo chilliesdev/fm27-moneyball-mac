@@ -359,6 +359,45 @@ input:focus-visible {
   font-size: 0.86rem;
 }
 
+.search-field {
+  position: relative;
+}
+
+.search-suggestions {
+  position: absolute;
+  inset: calc(100% + 0.25rem) auto auto 0;
+  z-index: 5;
+  inline-size: min(18rem, calc(100vw - 3rem));
+  min-inline-size: 100%;
+  max-block-size: 20rem;
+  overflow: auto;
+  margin: 0;
+  padding: 0.25rem;
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgb(0 0 0 / 0.16);
+}
+
+.search-suggestions li {
+  display: grid;
+  gap: 0.1rem;
+  padding: 0.4rem 0.55rem;
+  border-radius: 4px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.search-suggestions li:hover,
+.search-suggestions [aria-selected="true"] {
+  background: var(--surface-2);
+}
+
+.search-suggestions small {
+  color: var(--muted);
+}
+
 .role-select-row {
   display: flex;
   gap: 0.4rem;
@@ -515,6 +554,15 @@ input:focus-visible {
   background: var(--surface-2);
 }
 
+#club-list-footer {
+  border-block-start: 1px solid var(--border);
+  border-block-end: 0;
+}
+
+#club-list-footer[hidden] {
+  display: none;
+}
+
 .popover-hint {
   font-size: 0.74rem;
   color: var(--muted);
@@ -614,6 +662,32 @@ input:focus-visible {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
   flex: none;
+}
+
+.squad-results {
+  margin-block-start: 1rem;
+}
+
+#btn-more-squad[hidden],
+#dialog-season-stats[hidden] {
+  display: none;
+}
+
+.squad-players {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
+  gap: 0.45rem;
+  margin-block: 0.6rem;
+}
+
+.squad-players .player-link {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  white-space: normal;
 }
 
 .popover-empty {
@@ -1101,20 +1175,27 @@ dialog::backdrop {
 
 .dialog-head-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
 }
 
 .dialog-body {
   display: grid;
-  grid-template-columns: minmax(280px, 410px) 1fr;
+  grid-template-columns: minmax(280px, 410px) minmax(0, 1fr);
+  align-content: start;
   gap: 1.25rem;
   padding: 1.15rem 1.25rem;
   overflow: auto;
 }
 
+.dialog-body section > h3,
+.profile-metrics > h3 {
+  margin-block-end: 0.45rem;
+}
+
 @media (width < 760px) {
   .dialog-body {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -1122,6 +1203,10 @@ dialog::backdrop {
   display: grid;
   gap: 0.6rem;
   align-content: start;
+}
+
+.radar-panel[hidden] {
+  display: none;
 }
 
 .radar-controls label {
@@ -1145,6 +1230,31 @@ dialog::backdrop {
   border-radius: 8px;
   background: var(--surface-2);
   margin-block-start: 0.4rem;
+}
+
+.profile-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem;
+  margin: 0;
+}
+
+.profile-facts > div {
+  padding: 0.42rem 0.6rem;
+  background: var(--surface-2);
+  border-radius: 7px;
+  overflow-wrap: anywhere;
+}
+
+.profile-facts dt {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.profile-facts dd {
+  margin: 0;
+  font-size: 0.86rem;
+  font-weight: 600;
 }
 
 .stats-grid {
@@ -1414,6 +1524,16 @@ dialog::backdrop {
 .shortlist-body {
   padding: 1rem 1.25rem;
   overflow: auto;
+  display: grid;
+  align-content: start;
+  gap: 0.75rem;
+}
+
+.shortlist-filter {
+  max-inline-size: 14rem;
+}
+
+.shortlist-items {
   display: grid;
   gap: 0.55rem;
 }

@@ -7,7 +7,7 @@
   <title>FM27 — Moneyball Scout</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='15' fill='%23c46b00'/%3E%3Ctext x='16' y='21' font-size='16' font-weight='bold' text-anchor='middle' fill='white' font-family='sans-serif'%3EM%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="vendor/tabulator/tabulator.min.css">
-  <link rel="stylesheet" href="styles.css?v=2">
+  <link rel="stylesheet" href="styles.css?v=5">
 </head>
 <body>
   <header class="topbar">
@@ -55,10 +55,12 @@
 
     <section class="filters-panel" aria-label="Scouting filters">
       <div class="filter-grid">
-        <label class="field">
-          <span>Search Player / Club <kbd class="kbd-hint" aria-hidden="true">/</kbd></span>
-          <input type="search" id="f-search" placeholder="Name or club..." aria-keyshortcuts="/">
-        </label>
+        <div class="field search-field">
+          <label for="f-search">Search Player / Club <kbd class="kbd-hint" aria-hidden="true">/</kbd></label>
+          <input type="search" id="f-search" placeholder="Name or club..." autocomplete="off" role="combobox"
+                 aria-autocomplete="list" aria-controls="search-suggestions" aria-expanded="false" aria-keyshortcuts="/">
+          <ul id="search-suggestions" class="search-suggestions" role="listbox" aria-label="Search suggestions" hidden></ul>
+        </div>
 
         <div class="field">
           <span>Leagues</span>
@@ -71,7 +73,7 @@
               <input type="search" class="popover-search" placeholder="Search leagues..." aria-label="Search leagues">
             </div>
             <div class="popover-actions">
-              <span class="popover-hint">Multi-select</span>
+              <span class="popover-hint">Matching players</span>
               <button type="button" class="btn-link" data-action="clear-facet" data-facet="leagues">Clear</button>
             </div>
             <div id="list-leagues" class="popover-list" role="listbox" aria-multiselectable="true" aria-label="Leagues"></div>
@@ -93,6 +95,10 @@
               <button type="button" class="btn-link" data-action="clear-facet" data-facet="clubs">Clear</button>
             </div>
             <div id="list-clubs" class="popover-list" role="listbox" aria-multiselectable="true" aria-label="Clubs"></div>
+            <div id="club-list-footer" class="popover-actions" hidden>
+              <span id="club-list-count" class="popover-hint"></span>
+              <button type="button" id="btn-more-clubs" class="btn-link">Show More</button>
+            </div>
           </div>
         </div>
 
@@ -172,6 +178,11 @@
         </label>
 
         <label class="field">
+          <span>Min Age</span>
+          <input type="number" id="f-min-age" min="0" step="1" placeholder="Any age">
+        </label>
+
+        <label class="field">
           <span>Max Age</span>
           <select id="f-max-age">
             <option value="99">Any Age</option>
@@ -181,6 +192,11 @@
             <option value="27">&le; 27</option>
             <option value="30">&le; 30</option>
           </select>
+        </label>
+
+        <label class="field">
+          <span>Min Transfer Value (£)</span>
+          <input type="number" id="f-min-val" min="0" step="1" placeholder="Any value">
         </label>
 
         <label class="field">
@@ -194,6 +210,11 @@
             <option value="25000000">&le; 25M</option>
             <option value="50000000">&le; 50M</option>
           </select>
+        </label>
+
+        <label class="field">
+          <span>Min Weekly Wage (£)</span>
+          <input type="number" id="f-min-wage" min="0" step="1" placeholder="Any wage">
         </label>
 
         <label class="field">
@@ -291,6 +312,12 @@
       </div>
       <div id="sort-status" role="status" class="sr-only"></div>
       <div id="scouting-table" aria-labelledby="table-caption"></div>
+      <section id="squad-results" class="squad-results" aria-labelledby="squad-title" hidden>
+        <h3 id="squad-title">Squad Profiles</h3>
+        <p id="squad-status" class="subtitle" role="status"></p>
+        <div id="squad-players" class="squad-players"></div>
+        <button type="button" id="btn-more-squad" class="btn secondary btn-compact" hidden>Show More Players</button>
+      </section>
     </section>
   </main>
 
@@ -308,12 +335,22 @@
           </div>
         </div>
         <div class="dialog-head-actions">
+          <button type="button" id="dialog-copy-name" class="btn secondary">Copy Name</button>
           <button type="button" id="dialog-shortlist-btn" class="btn secondary">Shortlist</button>
           <button type="button" id="dialog-close-btn" class="btn primary" aria-label="Close player profile">Close</button>
         </div>
       </header>
       <div class="dialog-body">
-        <div class="radar-panel">
+        <section aria-labelledby="dialog-profile-heading">
+          <h3 id="dialog-profile-heading">Player Profile</h3>
+          <dl id="dialog-profile-facts" class="profile-facts"></dl>
+        </section>
+        <section aria-labelledby="dialog-season-heading">
+          <h3 id="dialog-season-heading">League Season Stats</h3>
+          <p id="dialog-season-empty" class="subtitle" hidden>No league stats recorded for this season.</p>
+          <dl id="dialog-season-stats" class="profile-facts"></dl>
+        </section>
+        <div id="dialog-radar-panel" class="radar-panel">
           <div class="radar-controls">
             <label>
               <span>Compare vs Managed Club</span>
@@ -322,7 +359,7 @@
           </div>
           <div id="radar-chart" class="radar-chart" role="img" aria-label="Player percentile radar chart"></div>
         </div>
-        <div class="profile-metrics">
+        <div id="dialog-profile-metrics" class="profile-metrics">
           <h3>Per-90 Output &amp; Percentiles</h3>
           <div id="dialog-stats-list" class="stats-grid"></div>
           <div id="dialog-progression-wrap">
@@ -407,11 +444,17 @@
         <h2 id="shortlist-dialog-title">Saved Shortlist</h2>
         <div class="dialog-head-actions">
           <button type="button" id="btn-export-shortlist" class="btn primary">Export Shortlist CSV</button>
-          <button type="button" id="btn-clear-shortlist" class="btn secondary">Clear</button>
+          <button type="button" id="btn-clear-shortlist" class="btn secondary">Clear Shortlist</button>
           <button type="button" id="shortlist-close-btn" class="btn secondary">Close</button>
         </div>
       </header>
-      <div class="shortlist-body" id="shortlist-body"></div>
+      <div class="shortlist-body">
+        <label class="field shortlist-filter">
+          <span>Position</span>
+          <select id="shortlist-position"><option value="">All Positions</option></select>
+        </label>
+        <div class="shortlist-items" id="shortlist-body"></div>
+      </div>
     </div>
   </dialog>
 
@@ -419,6 +462,6 @@
 
   <script src="vendor/echarts/echarts.min.js"></script>
   <script src="vendor/tabulator/tabulator.min.js"></script>
-  <script src="app.js?v=2"></script>
+  <script src="app.js?v=5"></script>
 </body>
 </html>

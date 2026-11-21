@@ -28,11 +28,21 @@
   ];
   const FOOT_OPTIONS = ["Left", "Right", "Both"];
   const STATUS_OPTIONS = ["Expiring Soon", "On Loan", "Not On Loan", "Free Agent"];
+  const CLUB_PAGE_SIZE = 250;
+  const SQUAD_PAGE_SIZE = 24;
+  const MIN_FILTERS = [
+    { id: "minAge", label: "Min Age", field: "age", prefix: "", suffix: "" },
+    { id: "minVal", label: "Min Transfer Value", field: "value", prefix: "£", suffix: "" },
+    { id: "minWage", label: "Min Weekly Wage", field: "wage", prefix: "£", suffix: "/wk" },
+  ];
 
   const DEFAULT_FILTERS = {
     minMins: "900",
+    minAge: "",
     maxAge: "25",
+    minVal: "",
     maxVal: "15000000",
+    minWage: "",
     maxWage: "999999999",
     contract: "all",
     minRep: "5500",
@@ -57,8 +67,12 @@
     seasons: [],
     meta: null,
     cache: new Map(),
-    distCache: new Map(),
-    catalogCache: new Map(),
+    clubCatalogs: new WeakMap(),
+    playerIndex: null,
+    searchOptions: [],
+    profileRequest: 0,
+    distCache: new WeakMap(),
+    catalogCache: new WeakMap(),
     shortlist: loadJsonStorage(SHORTLIST_KEY, {}),
     presets: loadJsonStorage(PRESETS_KEY, {}),
     colPrefs: loadJsonStorage(COLS_KEY, {}),
@@ -70,9 +84,12 @@
       feet: new Set(),
       statuses: new Set(),
     },
+    clubOptionLimit: CLUB_PAGE_SIZE,
+    squadLimit: SQUAD_PAGE_SIZE,
+    squadEntries: [],
     scoreConfig: null,
     filtered: [],
-    activePlayer: null,
+    activeProfile: null,
     dialogOpenToken: 0,
     scatterChart: null,
     scatterResizeObs: null,
@@ -101,9 +118,13 @@
     tablist: document.getElementById("position-tablist"),
     tabs: [...document.querySelectorAll('#position-tablist [role="tab"]')],
     search: document.getElementById("f-search"),
+    searchSuggestions: document.getElementById("search-suggestions"),
     minMins: document.getElementById("f-min-mins"),
+    minAge: document.getElementById("f-min-age"),
     maxAge: document.getElementById("f-max-age"),
+    minVal: document.getElementById("f-min-val"),
     maxVal: document.getElementById("f-max-val"),
+    minWage: document.getElementById("f-min-wage"),
     maxWage: document.getElementById("f-max-wage"),
     contract: document.getElementById("f-contract"),
     minRep: document.getElementById("f-min-rep"),
@@ -113,6 +134,9 @@
     dynamicPct: document.getElementById("f-dynamic-pct"),
     includeHull: document.getElementById("f-include-hull"),
     clubsScopeHint: document.getElementById("clubs-scope-hint"),
+    clubListFooter: document.getElementById("club-list-footer"),
+    clubListCount: document.getElementById("club-list-count"),
+    btnMoreClubs: document.getElementById("btn-more-clubs"),
     activeFiltersBar: document.getElementById("active-filters-bar"),
     activeFiltersChips: document.getElementById("active-filters-chips"),
     btnResetFilters: document.getElementById("btn-reset-filters"),
@@ -123,6 +147,10 @@
     scatterChart: document.getElementById("scatter-chart"),
     tableCaption: document.getElementById("table-caption"),
     tableCountNote: document.getElementById("table-count-note"),
+    squadResults: document.getElementById("squad-results"),
+    squadStatus: document.getElementById("squad-status"),
+    squadPlayers: document.getElementById("squad-players"),
+    btnMoreSquad: document.getElementById("btn-more-squad"),
     btnColumnChooser: document.getElementById("btn-column-chooser"),
     columnChooserPopover: document.getElementById("column-chooser-popover"),
     scoutingTable: document.getElementById("scouting-table"),
@@ -135,12 +163,18 @@
     dialogClubImg: document.getElementById("dialog-club-img"),
     dialogName: document.getElementById("dialog-player-name"),
     dialogMeta: document.getElementById("dialog-player-meta"),
+    dialogCopyName: document.getElementById("dialog-copy-name"),
     dialogShortlistBtn: document.getElementById("dialog-shortlist-btn"),
     dialogCloseBtn: document.getElementById("dialog-close-btn"),
     dialogCompareSelect: document.getElementById("dialog-compare-select"),
     radarChart: document.getElementById("radar-chart"),
+    dialogProfileFacts: document.getElementById("dialog-profile-facts"),
+    dialogSeasonHeading: document.getElementById("dialog-season-heading"),
+    dialogSeasonEmpty: document.getElementById("dialog-season-empty"),
+    dialogSeasonStats: document.getElementById("dialog-season-stats"),
+    dialogRadarPanel: document.getElementById("dialog-radar-panel"),
+    dialogProfileMetrics: document.getElementById("dialog-profile-metrics"),
     dialogStatsList: document.getElementById("dialog-stats-list"),
-    dialogProgressionWrap: document.getElementById("dialog-progression-wrap"),
     dialogProgressionEmpty: document.getElementById("dialog-progression-empty"),
     progressionChart: document.getElementById("progression-chart"),
     scoreDialog: document.getElementById("score-dialog"),
@@ -164,6 +198,7 @@
     scorePreviewList: document.getElementById("score-preview-list"),
     shortlistDialog: document.getElementById("shortlist-dialog"),
     shortlistBody: document.getElementById("shortlist-body"),
+    shortlistPosition: document.getElementById("shortlist-position"),
     shortlistCloseBtn: document.getElementById("shortlist-close-btn"),
     btnExportShortlist: document.getElementById("btn-export-shortlist"),
     btnClearShortlist: document.getElementById("btn-clear-shortlist"),
@@ -255,6 +290,15 @@
 
   function playerName(p) {
     return p?.name || "Unnamed Player";
+  }
+
+  async function copyPlayerName(player) {
+    try {
+      await navigator.clipboard.writeText(player.name);
+      showToast("Player name copied");
+    } catch {
+      showToast("Could not copy the player name");
+    }
   }
 
   function clubNameOf(p) {
@@ -381,18 +425,17 @@
   function getThemeColors() {
     const cs = getComputedStyle(document.documentElement);
     const isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-    const read = (prop, fallback) => cs.getPropertyValue(prop).trim() || fallback;
+    // Canvas needs the theme's color values. The UI tokens can contain light-dark().
+    const mode = isDark ? "dark" : "light";
+    const read = (prop) => cs.getPropertyValue(`--${prop}-${mode}`).trim();
     return {
-      isDark,
-      bg: read("--bg", isDark ? "#0f1216" : "#f4f5f7"),
-      surface: read("--surface", isDark ? "#171c22" : "#ffffff"),
-      surface2: read("--surface-2", isDark ? "#1f262e" : "#eef0f4"),
-      border: read("--border", isDark ? "#2c3540" : "#d7dce3"),
-      text: read("--text", isDark ? "#eef2f6" : "#14181f"),
-      muted: read("--muted", isDark ? "#9aa6b5" : "#525d6d"),
-      accent: read("--accent", isDark ? "#f59e0b" : "#c46b00"),
-      compare: read("--compare", isDark ? "#38bdf8" : "#0284c7"),
-      poolDot: read("--pool-dot", isDark ? "#38bdf8" : "#0284c7"),
+      surface: read("surface"),
+      border: read("border"),
+      text: read("text"),
+      muted: read("muted"),
+      accent: read("accent"),
+      compare: read("compare"),
+      poolDot: read("pool-dot"),
       gridLine: isDark ? "rgba(154, 166, 181, 0.16)" : "rgba(82, 93, 109, 0.15)",
       quadrantFill: isDark ? "rgba(245, 158, 11, 0.08)" : "rgba(196, 107, 0, 0.07)",
     };
@@ -411,6 +454,54 @@
     const data = await res.json();
     state.cache.set(key, data);
     return data;
+  }
+
+  function playerLookupEntry(player, groups, hasStats) {
+    return { player, groups, hasStats, nameKey: normalizeSearchText(player.name) };
+  }
+
+  async function readPlayerIndex(meta, season) {
+    if (meta.has_player_search) {
+      const url = season ? `/seasons/${encodeURIComponent(season)}/data/player_search.json` : "data/player_search.json";
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("Failed to load the player index");
+      const { fields, rows } = await res.json();
+      return rows.map((row) => {
+        const player = {};
+        for (let i = 0; i < fields.length; i++) player[fields[i]] = row[i];
+        return playerLookupEntry(player, player.position_groups, player.has_scouting_stats);
+      });
+    }
+
+    const positions = await Promise.allSettled(Object.keys(POS_LABELS).map((pos) => loadPosition(pos, season)));
+    const entries = new Map();
+    for (const result of positions) {
+      if (result.status !== "fulfilled") continue;
+      const { players, position } = result.value;
+      for (const player of players) {
+        if (!player.name) continue;
+        const entry = entries.get(player.uid);
+        if (entry) entry.groups.push(position);
+        else entries.set(player.uid, playerLookupEntry(player, [position], true));
+      }
+    }
+    return [...entries.values()];
+  }
+
+  function ensurePlayerIndex() {
+    if (state.playerIndex) return state.playerIndex;
+    const index = { entries: null, failed: false };
+    state.playerIndex = index;
+    readPlayerIndex(state.meta, state.season).then((entries) => {
+      index.entries = entries;
+    }).catch(() => {
+      index.failed = true;
+    }).finally(() => {
+      if (state.playerIndex !== index) return;
+      if (!els.search.hasAttribute("aria-activedescendant")) renderSearchSuggestions();
+      renderSquadProfiles();
+    });
+    return index;
   }
 
   function populateContractOptions() {
@@ -433,7 +524,11 @@
     const url = season ? `/seasons/${encodeURIComponent(season)}/data/meta.json` : "data/meta.json";
     const res = await fetch(url);
     if (!res.ok) throw new Error(`Failed loading ${url}`);
-    state.meta = await res.json();
+    const meta = await res.json();
+    if (season !== state.season) return;
+    state.meta = meta;
+    state.playerIndex = null;
+    state.clubCatalogs = new WeakMap();
     const clubName = state.meta.club_name || "Moneyball Scout";
     const shortName = state.meta.club_short_name || clubName;
     const crestId = state.meta.club_img_id || state.meta.club_uid || "";
@@ -448,8 +543,7 @@
   // ---- Unified Metric Catalog & Lazy Float64Array Scoring Engine (F12) ----
 
   function getMetricCatalog(dataset) {
-    const cacheKey = `${state.season || "latest"}:${dataset.position}`;
-    if (state.catalogCache.has(cacheKey)) return state.catalogCache.get(cacheKey);
+    if (state.catalogCache.has(dataset)) return state.catalogCache.get(dataset);
 
     const byKey = new Map();
     const list = [];
@@ -478,7 +572,7 @@
       }
     }
     const catalog = { list, byKey, defaultKeys };
-    state.catalogCache.set(cacheKey, catalog);
+    state.catalogCache.set(dataset, catalog);
     return catalog;
   }
 
@@ -528,11 +622,15 @@
   }
 
   function getMetricDist(dataset, baseline, key) {
-    const poolKey = `${state.season || "latest"}:${dataset.position}:${baseline.tag}`;
-    let metricMap = state.distCache.get(poolKey);
+    let pools = state.distCache.get(dataset);
+    if (!pools) {
+      pools = new Map();
+      state.distCache.set(dataset, pools);
+    }
+    let metricMap = pools.get(baseline.tag);
     if (!metricMap) {
       metricMap = new Map();
-      state.distCache.set(poolKey, metricMap);
+      pools.set(baseline.tag, metricMap);
     }
     if (metricMap.has(key)) return metricMap.get(key);
 
@@ -610,9 +708,10 @@
     }
     const catalog = getMetricCatalog(dataset);
     const meta = catalog.byKey.get(key);
-    const cfgItem = state.scoreConfig?.metrics.find((m) => m.key === key);
+    const config = dataset.position === state.pos ? state.scoreConfig : null;
+    const cfgItem = config?.metrics.find((m) => m.key === key);
     const higher = cfgItem ? cfgItem.higher_is_better : (meta?.higher_is_better ?? true);
-    const method = state.scoreConfig?.method || "percentile";
+    const method = config?.method || "percentile";
     const dist = getMetricDist(dataset, baseline, key);
     return Math.round(
       scoreMetric(player?.[key], method, higher, dist, player?.[`pct_${key}`], meta?.higher_is_better ?? true)
@@ -796,16 +895,37 @@
 
   function readScalarFilters() {
     return {
+      minimums: MIN_FILTERS.flatMap((filter) => {
+        const input = els[filter.id];
+        return input.validity.valid && Number.isFinite(input.valueAsNumber)
+          ? [{ ...filter, value: input.valueAsNumber }]
+          : [];
+      }),
       minMins: Number(els.minMins.value),
       minRep: Number(els.minRep.value),
       maxAge: Number(els.maxAge.value),
       maxVal: Number(els.maxVal.value),
       maxWage: Number(els.maxWage.value),
       contractFilter: els.contract.value || "all",
-      search: els.search.value.trim().toLowerCase(),
+      search: normalizeSearchText(els.search.value),
       dynamicPct: els.dynamicPct.checked,
       includeHull: els.includeHull.checked,
     };
+  }
+
+  function normalizeSearchText(value) {
+    return String(value ?? "").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().trim();
+  }
+
+  function matchesSearch(player, query) {
+    if (!query) return true;
+    return normalizeSearchText(`${player.name ?? ""} ${player.club ?? ""} ${player.positions ?? ""} ${player.league ?? ""} ${player.nation ?? ""}`).includes(query);
+  }
+
+  function matchesLocation(player, omitFacet = null) {
+    const { leagues, clubs } = state.filters;
+    return (omitFacet === "leagues" || !leagues.size || leagues.has(player.league || "Free Agent")) &&
+      (omitFacet === "clubs" || !clubs.size || clubs.has(clubKeyOf(player)));
   }
 
   function matchesPlayer(p, scalar, omitFacet = null) {
@@ -813,6 +933,9 @@
     if (!p.is_hull && p.minutes < scalar.minMins) return false;
     if (p.is_hull && p.minutes < 300) return false;
     if (!p.is_hull && p.club_rep < scalar.minRep) return false;
+    if (scalar.minimums.some(({ field, value }) => !Number.isFinite(p[field]) || p[field] < value)) {
+      return false;
+    }
     if (!p.is_hull && scalar.maxAge < 99 && (p.age === null || p.age === undefined || p.age > scalar.maxAge)) {
       return false;
     }
@@ -838,18 +961,9 @@
         if (!yr || yr !== exact) return false;
       }
     }
-    if (scalar.search) {
-      const hay = `${p.name ?? ""} ${p.club ?? ""} ${p.positions ?? ""} ${p.league ?? ""} ${p.nation ?? ""}`.toLowerCase();
-      if (!hay.includes(scalar.search)) return false;
-    }
+    if (!matchesSearch(p, scalar.search) || !matchesLocation(p, omitFacet)) return false;
 
     // Categorical multi-select filters apply uniformly (including is_hull)
-    if (omitFacet !== "leagues" && state.filters.leagues.size > 0) {
-      if (!state.filters.leagues.has(p.league || "Free Agent")) return false;
-    }
-    if (omitFacet !== "clubs" && state.filters.clubs.size > 0) {
-      if (!state.filters.clubs.has(clubKeyOf(p))) return false;
-    }
     if (omitFacet !== "positions" && state.filters.positions.size > 0) {
       const tokens = parsePlayerPositions(p.positions);
       if (!tokens.some((t) => state.filters.positions.has(t))) return false;
@@ -873,9 +987,119 @@
     return true;
   }
 
+  function closeSearchSuggestions() {
+    els.searchSuggestions.hidden = true;
+    els.search.setAttribute("aria-expanded", "false");
+    els.search.removeAttribute("aria-activedescendant");
+  }
+
+  function renderSearchSuggestions() {
+    closeSearchSuggestions();
+    const query = normalizeSearchText(els.search.value);
+    const dataset = activeDataset();
+    if (!query || !dataset || document.activeElement !== els.search) return;
+
+    const index = query.length >= 2 ? ensurePlayerIndex() : null;
+    const visiblePlayers = new Set(state.filtered.map((player) => player.uid));
+    const visibleClubs = new Set(state.filtered.map(clubNameOf));
+    const candidates = index?.entries || dataset.players.map((player) => playerLookupEntry(player, [dataset.position], true));
+    const names = candidates.filter((entry) => entry.nameKey.includes(query));
+    const wordStart = ` ${query}`;
+    const matchRank = (name) => (name === query ? 0 : name.startsWith(query) || name.includes(wordStart) ? 1 : 2);
+    names.sort((a, b) => matchRank(a.nameKey) - matchRank(b.nameKey) ||
+      Number(visiblePlayers.has(b.player.uid)) - Number(visiblePlayers.has(a.player.uid)) ||
+      collator.compare(playerName(a.player), playerName(b.player)));
+    const clubs = new Map();
+    for (const { club } of getClubCatalog(dataset).values()) {
+      const nameKey = normalizeSearchText(club);
+      if (nameKey.includes(query)) clubs.set(club, nameKey);
+    }
+    const suggestions = [
+      ...names.slice(0, 5).map((entry) => ({ value: playerName(entry.player), detail: clubNameOf(entry.player), entry })),
+      ...[...clubs].sort((a, b) => matchRank(a[1]) - matchRank(b[1]) ||
+        Number(visibleClubs.has(b[0])) - Number(visibleClubs.has(a[0])) || a[1].length - b[1].length ||
+        collator.compare(a[0], b[0]))
+        .slice(0, 4).map(([value]) => ({ value, detail: "Club" })),
+    ];
+    state.searchOptions = suggestions;
+    if (!suggestions.length) return;
+
+    els.searchSuggestions.innerHTML = suggestions.map(({ value, detail }, index) => `
+      <li id="search-suggestion-${index}" role="option" aria-selected="false" data-index="${index}" data-value="${escapeHtml(value)}">
+        <span>${escapeHtml(value)}</span><small>${escapeHtml(detail)}</small>
+      </li>
+    `).join("");
+    const gridBottom = els.search.closest(".filter-grid").getBoundingClientRect().bottom;
+    const searchBottom = els.search.getBoundingClientRect().bottom;
+    els.searchSuggestions.style.maxBlockSize = `min(20rem, ${gridBottom - searchBottom}px)`;
+    els.searchSuggestions.hidden = false;
+    els.search.setAttribute("aria-expanded", "true");
+  }
+
+  function selectSearchSuggestion(option) {
+    const selection = state.searchOptions[Number(option.dataset.index)];
+    if (!selection) return;
+    els.search.value = selection.value;
+    refreshView();
+    closeSearchSuggestions();
+    if (selection.entry) openLookupProfile(selection.entry);
+  }
+
+  async function openLookupProfile({ player, groups, hasStats }) {
+    const request = ++state.profileRequest;
+    const season = state.season;
+    const group = groups.includes(state.pos) ? state.pos : groups[0];
+    const dataset = hasStats && group ? await loadPosition(group, season).catch(() => null) : null;
+    if (request !== state.profileRequest || season !== state.season || els.playerDialog.open) return;
+    const scoutingRow = dataset?.players.find((row) => row.uid === player.uid);
+    openPlayerDialog(scoutingRow || player, scoutingRow ? dataset : null, season);
+  }
+
+  function wireSearchSuggestions() {
+    els.search.addEventListener("input", refreshView);
+    els.search.addEventListener("focus", renderSearchSuggestions);
+    els.search.addEventListener("blur", closeSearchSuggestions);
+    window.addEventListener("resize", () => {
+      if (!els.searchSuggestions.hidden) renderSearchSuggestions();
+    });
+    els.searchSuggestions.addEventListener("mousedown", (event) => event.preventDefault());
+    els.searchSuggestions.addEventListener("click", (event) => {
+      const option = event.target.closest("[role='option']");
+      if (option) selectSearchSuggestion(option);
+    });
+    els.search.addEventListener("keydown", (event) => {
+      if (event.isComposing) return;
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        if (els.searchSuggestions.hidden) renderSearchSuggestions();
+        if (els.searchSuggestions.hidden) return;
+        event.preventDefault();
+        const options = [...els.searchSuggestions.children];
+        const current = options.findIndex((option) => option.getAttribute("aria-selected") === "true");
+        const step = event.key === "ArrowDown" ? 1 : -1;
+        const next = current < 0 && step < 0 ? options.length - 1 : (current + step + options.length) % options.length;
+        options[current]?.setAttribute("aria-selected", "false");
+        options[next].setAttribute("aria-selected", "true");
+        els.search.setAttribute("aria-activedescendant", options[next].id);
+        options[next].scrollIntoView({ block: "nearest" });
+      } else if (!els.searchSuggestions.hidden && event.key === "Escape") {
+        event.preventDefault();
+        closeSearchSuggestions();
+      } else if (!els.searchSuggestions.hidden && event.key === "Enter") {
+        const option = els.searchSuggestions.querySelector('[aria-selected="true"]');
+        if (option) {
+          event.preventDefault();
+          selectSearchSuggestion(option);
+        }
+      }
+    });
+  }
+
   function getClubCatalog(dataset) {
+    const cached = state.clubCatalogs.get(dataset);
+    if (cached) return cached;
+    const catalog = state.meta?.season === dataset.season ? state.meta?.club_catalog || [] : [];
     const map = new Map();
-    for (const p of dataset.players) {
+    for (const p of [...dataset.players, ...catalog]) {
       const key = clubKeyOf(p);
       if (!map.has(key)) {
         map.set(key, {
@@ -886,19 +1110,16 @@
         });
       }
     }
+    state.clubCatalogs.set(dataset, map);
     return map;
   }
 
-  function pruneClubsBySelectedLeagues(dataset, removedLeague = null) {
-    if (state.filters.clubs.size === 0) return;
+  function pruneClubsBySelectedLeagues(dataset) {
+    if (state.filters.clubs.size === 0 || state.filters.leagues.size === 0) return;
     const clubMap = getClubCatalog(dataset);
     for (const cKey of [...state.filters.clubs]) {
       const info = clubMap.get(cKey);
-      if (!info) {
-        state.filters.clubs.delete(cKey);
-      } else if (state.filters.leagues.size > 0 && !state.filters.leagues.has(info.league)) {
-        state.filters.clubs.delete(cKey);
-      } else if (removedLeague && info.league === removedLeague) {
+      if (!info || !state.filters.leagues.has(info.league)) {
         state.filters.clubs.delete(cKey);
       }
     }
@@ -943,13 +1164,14 @@
     const selected = state.filters[facetName];
     const scalar = readScalarFilters();
     const searchInput = cfg.popover.querySelector(".popover-search");
-    const query = (searchInput?.value || "").trim().toLowerCase();
+    const query = normalizeSearchText(searchInput?.value);
 
     const pool = dataset.players.filter((p) => matchesPlayer(p, scalar, facetName));
     const counts = new Map();
     const metaMap = new Map();
 
     if (facetName === "leagues") {
+      for (const club of getClubCatalog(dataset).values()) counts.set(club.league, 0);
       for (const p of pool) {
         const val = p.league || "Free Agent";
         counts.set(val, (counts.get(val) || 0) + 1);
@@ -959,22 +1181,14 @@
       }
     } else if (facetName === "clubs") {
       const clubCatalog = getClubCatalog(dataset);
-      for (const p of pool) {
-        const key = clubKeyOf(p);
-        counts.set(key, (counts.get(key) || 0) + 1);
-      }
       for (const [key, info] of clubCatalog.entries()) {
         if (state.filters.leagues.size > 0 && !state.filters.leagues.has(info.league)) continue;
-        if (!counts.has(key) && (selected.has(key) || state.filters.leagues.size > 0 || query)) {
-          counts.set(key, 0);
-        }
+        counts.set(key, 0);
         metaMap.set(key, info);
       }
-      if (els.clubsScopeHint) {
-        els.clubsScopeHint.textContent =
-          state.filters.leagues.size > 0
-            ? `${state.filters.leagues.size} league${state.filters.leagues.size > 1 ? "s" : ""} selected`
-            : "All leagues";
+      for (const p of pool) {
+        const key = clubKeyOf(p);
+        if (counts.has(key)) counts.set(key, counts.get(key) + 1);
       }
     } else if (facetName === "positions") {
       for (const tok of POSITION_TOKENS) counts.set(tok, 0);
@@ -1019,16 +1233,9 @@
       return { value, label, sub, imgId, count, isSelected: selected.has(value) };
     });
 
-    if (facetName === "clubs") {
-      entries = entries.filter((e) => {
-        if (state.filters.leagues.size > 0 || query) return metaMap.has(e.value);
-        return e.count > 0 || e.isSelected;
-      });
-    }
-
     if (query) {
       entries = entries.filter(
-        (e) => e.label.toLowerCase().includes(query) || e.sub.toLowerCase().includes(query)
+        (e) => normalizeSearchText(e.label).includes(query) || normalizeSearchText(e.sub).includes(query)
       );
     }
 
@@ -1045,7 +1252,11 @@
       });
     }
 
-    const renderLimit = entries.length > 250 && !query ? 250 : entries.length;
+    const renderLimit = facetName === "clubs" ? state.clubOptionLimit : entries.length;
+    if (facetName === "clubs") {
+      els.clubListFooter.hidden = entries.length <= renderLimit;
+      els.clubListCount.textContent = `${Math.min(renderLimit, entries.length).toLocaleString()} of ${entries.length.toLocaleString()} clubs`;
+    }
     if (!entries.length) {
       cfg.listbox.innerHTML = `<div class="popover-empty">No matching options</div>`;
     } else {
@@ -1072,12 +1283,6 @@
           `;
         })
         .join("");
-      if (entries.length > renderLimit) {
-        cfg.listbox.insertAdjacentHTML(
-          "beforeend",
-          `<div class="popover-empty">Showing top ${renderLimit} of ${entries.length}. Search to narrow down.</div>`
-        );
-      }
     }
   }
 
@@ -1118,6 +1323,9 @@
 
     if (els.minMins.value !== DEFAULT_FILTERS.minMins) {
       chips.push({ type: "scalar", id: "minMins", label: `Min Mins: ${els.minMins.value}+` });
+    }
+    for (const { id, label, prefix, suffix, value } of scalar.minimums) {
+      chips.push({ type: "scalar", id, label: `${label}: ≥ ${prefix}${value.toLocaleString()}${suffix}` });
     }
     if (els.maxAge.value !== DEFAULT_FILTERS.maxAge) {
       chips.push({
@@ -1177,7 +1385,7 @@
           els.search.value = "";
         } else if (chip.type === "facet") {
           state.filters[chip.facet].delete(chip.value);
-          if (chip.facet === "leagues") pruneClubsBySelectedLeagues(dataset, chip.value);
+          if (chip.facet === "leagues") pruneClubsBySelectedLeagues(dataset);
         } else if (chip.type === "scalar") {
           if (chip.id === "dynamicPct") els.dynamicPct.checked = DEFAULT_FILTERS.dynamicPct;
           else if (chip.id === "includeHull") els.includeHull.checked = DEFAULT_FILTERS.includeHull;
@@ -1197,14 +1405,10 @@
       const input = cfg.popover.querySelector(".popover-search");
       if (input) input.value = "";
     }
-    els.minMins.value = DEFAULT_FILTERS.minMins;
-    els.maxAge.value = DEFAULT_FILTERS.maxAge;
-    els.maxVal.value = DEFAULT_FILTERS.maxVal;
-    els.maxWage.value = DEFAULT_FILTERS.maxWage;
-    els.contract.value = DEFAULT_FILTERS.contract;
-    els.minRep.value = DEFAULT_FILTERS.minRep;
-    els.dynamicPct.checked = DEFAULT_FILTERS.dynamicPct;
-    els.includeHull.checked = DEFAULT_FILTERS.includeHull;
+    for (const [id, value] of Object.entries(DEFAULT_FILTERS)) {
+      if (typeof value === "boolean") els[id].checked = value;
+      else els[id].value = value;
+    }
     refreshView();
     showToast("All filters reset");
   }
@@ -1252,6 +1456,9 @@
             const ds = activeDataset();
             if (ds) {
               const name = popover.dataset.facet;
+              const input = popover.querySelector(".popover-search");
+              if (input) input.value = "";
+              if (name === "clubs") state.clubOptionLimit = CLUB_PAGE_SIZE;
               renderFacetOptions(name, ds);
             }
           }
@@ -1268,7 +1475,9 @@
         if (searchEl) {
           searchEl.addEventListener("input", () => {
             const ds = activeDataset();
-            if (ds) renderFacetOptions(popover.dataset.facet, ds);
+            const name = popover.dataset.facet;
+            if (name === "clubs") state.clubOptionLimit = CLUB_PAGE_SIZE;
+            if (ds) renderFacetOptions(name, ds);
           });
         }
 
@@ -1276,14 +1485,8 @@
         if (clearBtn) {
           clearBtn.addEventListener("click", () => {
             const name = popover.dataset.facet;
-            const prevLeagues = name === "leagues" ? [...state.filters.leagues] : [];
             state.filters[name].clear();
-            if (name === "leagues") {
-              const ds = activeDataset();
-              if (ds) {
-                for (const lg of prevLeagues) pruneClubsBySelectedLeagues(ds, lg);
-              }
-            }
+            if (searchEl) searchEl.value = "";
             refreshView();
           });
         }
@@ -1293,16 +1496,14 @@
           if (!opt) return;
           const name = popover.dataset.facet;
           const val = opt.dataset.value ?? "";
-          let removed = false;
           if (state.filters[name].has(val)) {
             state.filters[name].delete(val);
-            removed = true;
           } else {
             state.filters[name].add(val);
           }
           if (name === "leagues") {
             const ds = activeDataset();
-            if (ds) pruneClubsBySelectedLeagues(ds, removed ? val : null);
+            if (ds) pruneClubsBySelectedLeagues(ds);
           }
           refreshView();
           const refreshed = facet.listbox.querySelector(`[role="option"][data-value="${CSS.escape(val)}"]`);
@@ -1835,8 +2036,14 @@
         player: p,
         isBench,
       };
-      if (p.is_hull) hull.push(pt);
-      else others.push(pt);
+      if (p.is_hull) {
+        pt.itemStyle = isBench
+          ? { borderColor: theme.text, borderWidth: 2.5 }
+          : { borderColor: theme.surface, borderWidth: 1.5 };
+        hull.push(pt);
+      } else {
+        others.push(pt);
+      }
     }
 
     const totalCount = others.length + hull.length;
@@ -1978,7 +2185,7 @@
           largeThreshold: 2000,
           progressive: 0,
           symbolSize: 8,
-          itemStyle: { color: theme.poolDot, opacity: 0.72 },
+          itemStyle: { color: theme.poolDot, opacity: 0.9 },
           // ECharts emphasis can make a hovered point miss the next click.
           emphasis: { disabled: true },
           z: 2,
@@ -1991,12 +2198,9 @@
           type: "scatter",
           large: false,
           emphasis: { disabled: true },
+          symbol: "diamond",
           symbolSize: (val, params) => (params?.data?.isBench ? 15 : 12),
-          itemStyle: {
-            color: theme.accent,
-            borderColor: (params) => (params?.data?.isBench ? theme.text : theme.surface),
-            borderWidth: (params) => (params?.data?.isBench ? 2.5 : 1.5),
-          },
+          itemStyle: { color: theme.accent, opacity: 1 },
           label: {
             show: true,
             position: "right",
@@ -2019,7 +2223,7 @@
 
   // ---- ECharts Profile Radar & Progression (F14) ----
 
-  function renderRadar(player, comparePlayer, dataset, baseline) {
+  function renderRadar(player, comparePlayer, dataset, baseline, clubLabel) {
     if (!window.echarts || !els.radarChart) return;
     if (!state.radarChart) {
       state.radarChart = window.echarts.init(els.radarChart, null, { renderer: "canvas" });
@@ -2039,6 +2243,7 @@
       {
         value: playerValues,
         name: playerName(player),
+        symbol: "circle",
         areaStyle: { color: theme.accent, opacity: 0.28 },
         lineStyle: { color: theme.accent, width: 2.5 },
         itemStyle: { color: theme.accent },
@@ -2049,9 +2254,10 @@
       const cmpValues = metrics.map((m) => getPlayerMetricPct(comparePlayer, m.key, dataset, baseline));
       seriesData.push({
         value: cmpValues,
-        name: `${playerName(comparePlayer)} (${state.meta?.club_short_name || "Club"})`,
+        name: `${playerName(comparePlayer)} (${clubLabel})`,
+        symbol: "diamond",
         areaStyle: { color: theme.compare, opacity: 0.2 },
-        lineStyle: { color: theme.compare, width: 2 },
+        lineStyle: { color: theme.compare, width: 2.5, type: "dashed" },
         itemStyle: { color: theme.compare },
       });
     }
@@ -2092,12 +2298,11 @@
     );
   }
 
-  async function renderPlayerProgression(player, openToken) {
-    if (!state.seasons || state.seasons.length < 2) {
+  async function renderPlayerProgression(player, position, season, openToken) {
+    if (state.seasons.length < 2) {
       els.progressionChart.hidden = true;
       els.dialogProgressionEmpty.hidden = false;
-      const count = state.seasons?.length || 1;
-      els.dialogProgressionEmpty.textContent = `${count} season archived (${state.season || state.meta?.season || "current"}). Multi-season progression appears when 2+ seasons are archived.`;
+      els.dialogProgressionEmpty.textContent = `One season available (${season || "current"}).`;
       return;
     }
 
@@ -2108,7 +2313,7 @@
     const history = [];
     for (const entry of state.seasons) {
       try {
-        const ds = await loadPosition(state.pos, entry.season);
+        const ds = await loadPosition(position, entry.season);
         const match = ds.players.find((p) => p.uid === player.uid);
         if (match) history.push({ season: entry.season, row: match });
       } catch {
@@ -2122,7 +2327,7 @@
     if (history.length < 2) {
       els.progressionChart.hidden = true;
       els.dialogProgressionEmpty.hidden = false;
-      els.dialogProgressionEmpty.textContent = "Player has data in 1 archived season only.";
+      els.dialogProgressionEmpty.textContent = history.length ? "One season available for this player." : "No archived progression data.";
       return;
     }
 
@@ -2136,7 +2341,7 @@
     state.progressionChart.resize();
 
     const theme = getThemeColors();
-    const isGk = state.pos === "GK";
+    const isGk = position === "GK";
     const m1Key = isGk ? "xg_prevented_p90" : "npxg_p90";
     const m1Label = isGk ? "xG Prevented / 90" : "np-xG / 90";
     const m2Key = isGk ? "goals_allowed_p90" : "xa_p90";
@@ -2230,8 +2435,14 @@
     );
   }
 
-  function openPlayerDialog(player, dataset) {
-    state.activePlayer = player;
+  function renderProfileFacts(element, facts) {
+    element.innerHTML = facts.map(([label, value]) =>
+      `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value ?? "—")}</dd></div>`
+    ).join("");
+  }
+
+  function openPlayerDialog(player, dataset, season = state.season) {
+    state.activeProfile = { player, dataset, season };
     state.dialogOpenToken += 1;
     const openToken = state.dialogOpenToken;
 
@@ -2240,17 +2451,48 @@
     els.dialogClubImg.src = clubImgUrl(player.club_img_id || player.club_uid, clubNameOf(player));
     els.dialogClubImg.alt = clubNameOf(player);
     els.dialogName.textContent = playerName(player);
-    els.dialogMeta.textContent = `${clubNameOf(player)} · ${player.league || ""} · Age ${player.age ?? "?"} · ${
-      player.positions || "—"
-    } · ${player.foot || "—"} · ${player.minutes} mins · Value ${formatMoney(player.value)} · Wage ${
-      player.wage ? formatMoney(player.wage) + "/wk" : "—"
-    } · Contract ${player.contract_end || "—"}`;
+    els.dialogCopyName.disabled = !player.name;
+    els.dialogMeta.textContent = [clubNameOf(player), player.league].filter(Boolean).join(" · ");
+    renderProfileFacts(els.dialogProfileFacts, [
+      ["Age", player.age],
+      ["Nationality", player.nation || "—"],
+      ["Height", player.height_cm > 0 ? `${player.height_cm} cm` : "—"],
+      ["Preferred Foot", player.foot || "—"],
+      ["Natural Positions", parsePlayerPositions(player.positions).join(", ") || "—"],
+      ["Transfer Value", formatMoney(player.value)],
+      ["Weekly Wage", formatMoney(player.wage)],
+      ["Contract Ends", player.contract_end || "—"],
+      ...(player.on_loan ? [["On Loan From", player.loan_parent || "—"]] : []),
+    ]);
+
+    const seasonLabel = season || state.meta?.season;
+    els.dialogSeasonHeading.textContent = seasonLabel ? `League Season Stats · ${seasonLabel}` : "League Season Stats";
+    const seasonStats = [
+      ["apps", "Appearances"], ["starts", "Starts"], ["minutes", "Minutes"],
+      ["goals", "Goals"], ["assists", "Assists"], ["avg_rating", "Average Rating"],
+    ];
+    if (dataset?.position === "GK") {
+      seasonStats.push(["save_pct", "Save %"], ["clean_sheet_pct", "Clean Sheet %"]);
+    }
+    const hasSeasonStats = player.minutes != null;
+    els.dialogSeasonEmpty.hidden = hasSeasonStats;
+    els.dialogSeasonStats.hidden = !hasSeasonStats;
+    renderProfileFacts(els.dialogSeasonStats, seasonStats.map(([key, label]) => [
+      label, formatStat(key, player[key]),
+    ]));
 
     const isSaved = Boolean(state.shortlist[player.uid]);
-    els.dialogShortlistBtn.textContent = isSaved ? "Remove Shortlist" : "Add to Shortlist";
+    els.dialogShortlistBtn.textContent = isSaved ? "Remove from Shortlist" : "Add to Shortlist";
+    els.dialogRadarPanel.hidden = !dataset;
+    els.dialogProfileMetrics.hidden = !dataset;
+    if (!dataset) {
+      els.playerDialog.showModal();
+      return;
+    }
 
     const hullPool = dataset.players.filter((p) => p.is_hull && p.uid !== player.uid);
-    const hullOther = (state.meta?.hull_squad || []).filter(
+    const managedSquad = season === state.season ? state.meta?.hull_squad : null;
+    const hullOther = (managedSquad || []).filter(
       (p) => p.uid !== player.uid && !hullPool.some((h) => h.uid === p.uid)
     );
     els.dialogCompareSelect.innerHTML = [
@@ -2274,7 +2516,8 @@
     const drawCompare = () => {
       const cid = els.dialogCompareSelect.value;
       const cmp = hullPool.find((h) => h.uid === cid) || hullOther.find((h) => h.uid === cid) || null;
-      renderRadar(player, cmp, dataset, baseline);
+      const clubLabel = season === state.season ? state.meta?.club_short_name || "Club" : clubNameOf(cmp);
+      renderRadar(player, cmp, dataset, baseline, clubLabel);
     };
     els.dialogCompareSelect.onchange = drawCompare;
 
@@ -2292,18 +2535,20 @@
       })
       .join("");
 
+    els.progressionChart.hidden = true;
+    els.dialogProgressionEmpty.hidden = true;
     els.playerDialog.showModal();
 
     requestAnimationFrame(() => {
       if (!els.playerDialog.open || state.dialogOpenToken !== openToken) return;
       drawCompare();
-      renderPlayerProgression(player, openToken);
+      renderPlayerProgression(player, dataset.position, season, openToken);
     });
   }
 
   // ---- Tabulator Table & Column Chooser (F15) ----
 
-  function toggleRowShortlist(player) {
+  function toggleRowShortlist(player, position = state.pos, season = state.season) {
     const uid = player.uid;
     const name = playerName(player);
     if (state.shortlist[uid]) {
@@ -2322,7 +2567,9 @@
       value: player.value,
       wage: player.wage,
       contract_end: player.contract_end,
-      pos_group: state.pos,
+      pos_group: position,
+      season,
+      ...(position ? {} : { profile: player }),
     };
     saveShortlist();
     showToast(`Added ${name} to shortlist`);
@@ -2679,6 +2926,46 @@
 
   // ---- View Refresh & CSV Export ----
 
+  function renderSquadProfiles() {
+    const dataset = activeDataset();
+    if (!dataset) return;
+    const hasLocation = state.filters.leagues.size || state.filters.clubs.size;
+    const showSquad = !state.filtered.length && hasLocation && !dataset.players.some((p) => matchesLocation(p));
+    els.tableCountNote.textContent = state.filtered.length
+      ? "Hold Shift + click column headers for multi-column sort"
+      : showSquad
+        ? "No players in the selected clubs or leagues have enough league minutes for scouting in this position."
+        : "No players match the current scouting filters.";
+    els.squadResults.hidden = !showSquad || !state.meta.has_player_search;
+    if (els.squadResults.hidden) return;
+
+    const index = ensurePlayerIndex();
+    const query = normalizeSearchText(els.search.value);
+    state.squadEntries = (index.entries || []).filter(({ player, groups }) =>
+      groups.includes(dataset.position) && matchesLocation(player) && matchesSearch(player, query));
+    state.squadEntries.sort((a, b) => collator.compare(clubNameOf(a.player), clubNameOf(b.player)) ||
+      collator.compare(playerName(a.player), playerName(b.player)));
+    renderSquadRows();
+    if (!index.entries) {
+      els.squadStatus.textContent = index.failed ? "Player profiles could not load." : "Loading player profiles…";
+    }
+  }
+
+  function renderSquadRows() {
+    const entries = state.squadEntries;
+    const count = Math.min(entries.length, state.squadLimit);
+    els.squadStatus.textContent = entries.length
+      ? `${count.toLocaleString()} of ${entries.length.toLocaleString()} players in this position. Scouting limits apply to the stats table.`
+      : "No squad profiles match this position and search.";
+    els.squadPlayers.innerHTML = entries.slice(0, count).map(({ player }, index) => `
+      <button type="button" class="player-link" data-index="${index}">
+        ${escapeHtml(playerName(player))}
+        <small class="subtitle">${escapeHtml(clubNameOf(player))} · ${escapeHtml(parsePlayerPositions(player.positions).join(", "))}</small>
+      </button>
+    `).join("");
+    els.btnMoreSquad.hidden = entries.length <= count;
+  }
+
   function refreshView() {
     const dataset = activeDataset();
     if (!dataset) return;
@@ -2686,6 +2973,7 @@
     const { rows, baseline } = computePoolRows(dataset);
     rows.sort((a, b) => b.active_score - a.active_score);
     state.filtered = rows;
+    state.squadLimit = SQUAD_PAGE_SIZE;
 
     const pctMode = !baseline.isGlobal
       ? `Dynamic percentiles vs ${baseline.peerCount.toLocaleString()} peers (mins ≥ ${els.minMins.value}, rep ≥ ${els.minRep.value})`
@@ -2695,6 +2983,8 @@
 
     renderAllPopovers(dataset);
     renderActiveFilterChips(dataset);
+    renderSearchSuggestions();
+    renderSquadProfiles();
     renderScatter(dataset);
     return initOrUpdateTable(dataset, rows);
   }
@@ -2733,39 +3023,63 @@
     showToast(`Exported ${rows.length} rows to CSV`);
   }
 
-  function renderShortlistModal() {
-    const items = Object.values(state.shortlist);
-    if (!items.length) {
-      els.shortlistBody.innerHTML = `<p class="subtitle">No players shortlisted yet. Click the star on any row or open a player profile to add them.</p>`;
-    } else {
-      els.shortlistBody.innerHTML = items
-        .map(
-          (p) => `
-          <div class="shortlist-item">
-            <div>
-              <strong>${escapeHtml(playerName(p))}</strong> · ${escapeHtml(clubNameOf(p))} · Age ${
-            p.age ?? "?"
-          } · ${escapeHtml(p.positions || "—")}
-              <div class="subtitle">Mins ${p.minutes} · Value ${formatMoney(p.value)} · Wage ${
-            p.wage ? formatMoney(p.wage) + "/wk" : "—"
-          } · Contract ${escapeHtml(p.contract_end || "—")}</div>
-            </div>
-            <button type="button" class="btn secondary remove-shortlist-btn" data-uid="${escapeHtml(p.uid)}">Remove</button>
-          </div>
-        `
-        )
-        .join("");
-      els.shortlistBody.querySelectorAll(".remove-shortlist-btn").forEach((btn) => {
-        btn.addEventListener("click", () => {
-          const removedUid = btn.dataset.uid;
-          delete state.shortlist[removedUid];
-          saveShortlist();
-          renderShortlistModal();
-          state.tabulatorTable?.getRow(removedUid)?.reformat();
-        });
-      });
+  function filteredShortlist() {
+    const position = els.shortlistPosition.value;
+    const saved = Object.values(state.shortlist);
+    return position ? saved.filter((player) => parsePlayerPositions(player.positions).includes(position)) : saved;
+  }
+
+  function renderShortlist() {
+    const saved = Object.values(state.shortlist);
+    const positions = [...new Set(saved.flatMap((player) => parsePlayerPositions(player.positions)))].sort(collator.compare);
+    const selected = els.shortlistPosition.value;
+    els.shortlistPosition.replaceChildren(new Option("All Positions", ""), ...positions.map((position) => new Option(position)));
+    els.shortlistPosition.value = positions.includes(selected) ? selected : "";
+    els.shortlistPosition.disabled = !positions.length;
+
+    const items = filteredShortlist();
+    els.btnExportShortlist.disabled = !items.length;
+    els.btnClearShortlist.disabled = !saved.length;
+    els.shortlistBody.innerHTML = items.length ? items.map((player) => `
+      <div class="shortlist-item" data-uid="${escapeHtml(player.uid)}">
+        <div>
+          <button type="button" class="player-link" data-action="profile">${escapeHtml(playerName(player))}</button>
+          · ${escapeHtml(clubNameOf(player))} · Age ${escapeHtml(player.age ?? "?")}
+          · ${escapeHtml(parsePlayerPositions(player.positions).join(", ") || "—")}
+          <div class="subtitle">Mins ${escapeHtml(player.minutes ?? "—")} · Value ${formatMoney(player.value)} · Wage ${
+            player.wage == null ? "—" : `${formatMoney(player.wage)}/wk`
+          } · Contract ${escapeHtml(player.contract_end || "—")}</div>
+        </div>
+        <div class="dialog-head-actions">
+          <button type="button" class="btn secondary" data-action="copy-name" ${player.name ? "" : "disabled"}>Copy Name</button>
+          <button type="button" class="btn secondary remove-shortlist-btn" data-action="remove">Remove</button>
+        </div>
+      </div>
+    `).join("") : '<p class="subtitle">No players shortlisted yet. Select the star next to a player to add them.</p>';
+  }
+
+  async function openShortlistedPlayer(saved, button) {
+    if (saved.profile) {
+      openPlayerDialog(saved.profile, null, saved.season);
+      return;
     }
-    els.shortlistDialog.showModal();
+    button.disabled = true;
+    const seasons = new Set([state.season, saved.season ?? state.season, ...state.seasons.map((entry) => entry.season)]);
+    try {
+      for (const season of seasons) {
+        const dataset = await loadPosition(saved.pos_group, season).catch(() => null);
+        if (!els.shortlistDialog.open || !button.isConnected || els.playerDialog.open) return;
+        const player = dataset?.players.find((row) => row.uid === saved.uid);
+        if (player) {
+          button.disabled = false;
+          openPlayerDialog(player, dataset, season);
+          return;
+        }
+      }
+      showToast("No archived profile found for this player");
+    } finally {
+      button.disabled = false;
+    }
   }
 
   async function selectPosition(pos, focusTab = false) {
@@ -2817,9 +3131,8 @@
       selectPosition(els.tabs[next].dataset.pos, true);
     });
 
-    // Search already updates as the user types. A second update on blur can
-    // replace a filter chip just before its click event.
-    els.search.addEventListener("input", refreshView);
+    wireSearchSuggestions();
+    for (const { id } of MIN_FILTERS) els[id].addEventListener("input", refreshView);
     [
       els.minMins,
       els.maxAge,
@@ -2868,6 +3181,25 @@
     });
 
     els.btnResetFilters.addEventListener("click", resetAllFilters);
+    els.squadPlayers.addEventListener("click", (event) => {
+      const index = event.target.closest("[data-index]")?.dataset.index;
+      const entry = state.squadEntries[Number(index)];
+      if (entry) openLookupProfile(entry);
+    });
+    els.btnMoreSquad.addEventListener("click", () => {
+      const firstNewIndex = state.squadLimit;
+      state.squadLimit += SQUAD_PAGE_SIZE;
+      renderSquadRows();
+      els.squadPlayers.children[firstNewIndex]?.focus();
+    });
+    els.btnMoreClubs.addEventListener("click", () => {
+      const dataset = activeDataset();
+      if (!dataset) return;
+      const firstNewIndex = state.clubOptionLimit;
+      state.clubOptionLimit += CLUB_PAGE_SIZE;
+      renderFacetOptions("clubs", dataset);
+      FACETS.clubs.listbox.children[firstNewIndex]?.focus();
+    });
 
     wirePopoverBehaviors();
     wireScoreDialogEvents();
@@ -2891,6 +3223,7 @@
 
     els.playerDialog.addEventListener("close", () => {
       state.dialogOpenToken += 1;
+      state.activeProfile = null;
       if (state.radarChart) {
         state.radarChart.dispose();
         state.radarChart = null;
@@ -2901,31 +3234,55 @@
       }
     });
 
+    els.dialogCopyName.addEventListener("click", () => {
+      const player = state.activeProfile?.player;
+      if (player?.name) copyPlayerName(player);
+    });
     els.dialogShortlistBtn.addEventListener("click", () => {
-      const p = state.activePlayer;
-      if (!p) return;
-      const saved = toggleRowShortlist(p);
-      els.dialogShortlistBtn.textContent = saved ? "Remove Shortlist" : "Add to Shortlist";
-      state.tabulatorTable?.getRow(p.uid)?.reformat();
+      const profile = state.activeProfile;
+      if (!profile) return;
+      const { player, dataset, season } = profile;
+      const saved = toggleRowShortlist(player, dataset?.position || "", season);
+      els.dialogShortlistBtn.textContent = saved ? "Remove from Shortlist" : "Add to Shortlist";
+      state.tabulatorTable?.getRow(player.uid)?.reformat?.();
+      if (els.shortlistDialog.open) renderShortlist();
     });
 
     els.seasonSelect.addEventListener("change", async () => {
-      state.season = els.seasonSelect.value || null;
-      state.distCache.clear();
-      state.catalogCache.clear();
-      await loadMeta(state.season);
-      await selectPosition(state.pos);
+      const season = els.seasonSelect.value || null;
+      state.season = season;
+      state.playerIndex = null;
+      await loadMeta(season);
+      if (season === state.season) await selectPosition(state.pos);
     });
 
     els.btnRefreshSave.addEventListener("click", () => {
       refreshFromSave(els.saveSelect.value || null);
     });
 
-    els.btnShortlistView.addEventListener("click", renderShortlistModal);
+    els.btnShortlistView.addEventListener("click", () => {
+      renderShortlist();
+      els.shortlistDialog.showModal();
+    });
+    els.shortlistPosition.addEventListener("change", renderShortlist);
+    els.shortlistBody.addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-action]");
+      if (!button) return;
+      const player = state.shortlist[button.closest("[data-uid]")?.dataset.uid];
+      if (!player) return;
+      if (button.dataset.action === "profile") openShortlistedPlayer(player, button);
+      else if (button.dataset.action === "copy-name") copyPlayerName(player);
+      else if (button.dataset.action === "remove") {
+        delete state.shortlist[player.uid];
+        saveShortlist();
+        renderShortlist();
+        state.tabulatorTable?.getRow(player.uid)?.reformat?.();
+      }
+    });
     els.btnClearShortlist.addEventListener("click", () => {
       state.shortlist = {};
       saveShortlist();
-      renderShortlistModal();
+      renderShortlist();
       state.tabulatorTable?.getRows().forEach((r) => r.reformat());
       showToast("Shortlist cleared");
     });
@@ -2938,7 +3295,7 @@
     });
 
     els.btnExportShortlist.addEventListener("click", () => {
-      const items = Object.values(state.shortlist);
+      const items = filteredShortlist();
       if (!items.length) return;
       const cols = ["name", "club", "age", "positions", "pos_group", "minutes", "value", "wage", "contract_end"];
       const lines = [
@@ -2961,18 +3318,11 @@
       const dataset = activeDataset();
       if (!dataset) return;
       renderScatter(dataset);
-      if (els.playerDialog.open && state.activePlayer) {
-        const scalar = readScalarFilters();
-        const baseline = getBaselinePool(dataset, scalar.minMins, scalar.minRep, scalar.dynamicPct);
-        const hullPool = dataset.players.filter((p) => p.is_hull && p.uid !== state.activePlayer.uid);
-        const hullOther = (state.meta?.hull_squad || []).filter(
-          (p) => p.uid !== state.activePlayer.uid && !hullPool.some((h) => h.uid === p.uid)
-        );
-        const cid = els.dialogCompareSelect.value;
-        const cmp = hullPool.find((h) => h.uid === cid) || hullOther.find((h) => h.uid === cid) || null;
-        renderRadar(state.activePlayer, cmp, dataset, baseline);
+      if (els.playerDialog.open && state.activeProfile?.dataset) {
+        els.dialogCompareSelect.onchange();
         if (!els.progressionChart.hidden) {
-          renderPlayerProgression(state.activePlayer, state.dialogOpenToken);
+          const { player, dataset: profileDataset, season } = state.activeProfile;
+          renderPlayerProgression(player, profileDataset.position, season, state.dialogOpenToken);
         }
       }
       state.tabulatorTable?.redraw(true);
@@ -3024,8 +3374,6 @@
         throw new Error(data.error || `HTTP ${res.status}`);
       }
       state.cache.clear();
-      state.distCache.clear();
-      state.catalogCache.clear();
       state.season = data.latest_season || state.season;
       renderServerControls(data);
       await loadMeta(state.season);

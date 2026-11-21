@@ -43,6 +43,41 @@ function escapeRegex(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+async function selectSeasonWithManagedPlayers(page) {
+  const count = () => page.locator("#scatter-chart").evaluate((el) =>
+    window.echarts.getInstanceByDom(el).getOption().series[1].data.length);
+  const selector = page.locator("#f-season");
+  const current = await selector.inputValue();
+  const seasons = await selector.locator("option").evaluateAll((options) => options.map((option) => option.value));
+  for (const season of seasons) {
+    if (await count()) return;
+    if (season === current) continue;
+    await selector.selectOption(season);
+    await page.waitForFunction((value) => document.querySelector("#save-meta").textContent.includes(`Season ${value} ·`), season);
+    await waitForAppReady(page);
+  }
+  assert(await count(), "No season has managed-club players on the scatter plot");
+}
+
+async function waitForChartColors(page, selector, scheme, tokens) {
+  await page.waitForFunction(({ selector, scheme, tokens }) => {
+    const canvas = document.querySelector(`${selector} canvas`);
+    if (!canvas?.width || !canvas.height) return false;
+    const colors = getComputedStyle(document.documentElement);
+    const pending = tokens.map((token) => {
+      const hex = colors.getPropertyValue(`--${token}-${scheme}`).trim();
+      return [1, 3, 5].map((offset) => parseInt(hex.slice(offset, offset + 2), 16));
+    });
+    const pixels = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height).data;
+    for (let i = 0; i < pixels.length && pending.length; i += 4) {
+      if (pixels[i + 3] < 200) continue;
+      const match = pending.findIndex((rgb) => rgb.every((channel, j) => Math.abs(channel - pixels[i + j]) <= 2));
+      if (match >= 0) pending.splice(match, 1);
+    }
+    return pending.length === 0;
+  }, { selector, scheme, tokens });
+}
+
 async function getPopoverCheckboxes(popover) {
   const cbs = popover.locator('input[type="checkbox"]:visible');
   if ((await cbs.count()) > 0) return cbs;
@@ -473,6 +508,45 @@ function makeTests(baseUrl) {
     }
   });
 
+  add("F10-T1-07", "F10", 1, async (browser) => {
+    const leagueName = "Scheduled League";
+    const clubName = "Scheduled FC";
+    const { context, page, tracker } = await openApp(browser, baseUrl, {
+      preInitHook: async (pg) => {
+        await pg.route("**/data/meta.json", async (route) => {
+          const meta = await (await route.fetch()).json();
+          meta.club_catalog = [...(meta.club_catalog || []), {
+            club_uid: "99999999", club_img_id: "99999999", club: clubName, league: leagueName,
+          }];
+          await route.fulfill({ json: meta });
+        });
+      },
+    });
+    try {
+      await page.locator("#f-search").fill("no_matching_player_zzzz");
+      const { popover: allClubs } = await openFilterPopover(page, /\bclubs?\b/i);
+      const before = await allClubs.getByRole("option").count();
+      assert(before > 0, "Clubs vanished when the filter pool was empty");
+      await allClubs.getByRole("button", { name: "Show More" }).click();
+      assert((await allClubs.getByRole("option").count()) > before, "Show More did not reveal more clubs");
+      await page.keyboard.press("Escape");
+
+      const { popover: leagues } = await openFilterPopover(page, /\bleagues?\b/i);
+      const league = leagues.getByRole("option").filter({ hasText: leagueName });
+      assert((await league.locator(".opt-count").textContent()) === "0", "Scheduled league should show zero matches");
+      await league.click();
+      const { popover: clubs } = await openFilterPopover(page, /\bclubs?\b/i);
+      const options = clubs.getByRole("option");
+      assert((await options.count()) === 1, "Club list did not narrow to the selected league");
+      assert((await options.first().locator(".opt-label").textContent()) === clubName, "Scheduled club is missing");
+      assert((await options.first().locator(".opt-count").textContent()) === "0", "Scheduled club should show zero matches");
+      tracker.assertClean("F10-T1-07");
+      return "Full catalog stays available with zero matches and clubs can be paged and scoped";
+    } finally {
+      await context.close();
+    }
+  });
+
   add("F10-T1-04", "F10", 1, async (browser) => {
     const { context, page, tracker } = await openApp(browser, baseUrl);
     try {
@@ -568,6 +642,8 @@ function makeTests(baseUrl) {
         }
         if (!deselectedAny) break;
       }
+      assert(/Arsenal/i.test(await page.locator("#btn-f-clubs .trigger-label").textContent()),
+        "Clearing the last league unexpectedly cleared Arsenal");
       const inp = await getPopoverSearchInput(popover);
       await inp.fill("Sky Bet Championship");
       const champOpts = await getPopoverCheckboxes(popover);
@@ -766,6 +842,145 @@ function makeTests(baseUrl) {
       assert((await page.locator("#shortlist-count").textContent())?.trim() === "0", "Shortlist count did not return to 0");
       tracker.assertClean("F11-T1-04");
       return "Quick row shortlist toggle & persistence verified";
+    } finally {
+      await context.close();
+    }
+  });
+
+  add("F11-T1-07", "F11", 1, async (browser) => {
+    const { context, page, tracker } = await openApp(browser, baseUrl);
+    try {
+      const readPlayers = () => page.evaluate(() => {
+        const chart = window.echarts.getInstanceByDom(document.querySelector("#scatter-chart"));
+        return chart.getOption().series.flatMap((series) => series.data.map(({ player }) => {
+          const { uid, name, club, age, value, wage } = player;
+          return { uid, name, club, age, value, wage };
+        }));
+      });
+      const players = await readPlayers();
+      const sample = players.find((player) => player.name?.length > 3 && player.club?.length > 3 &&
+        [player.age, player.value, player.wage].every(Number.isFinite));
+      assert(sample, "No sample player has all three filter values");
+      const search = page.locator("#f-search");
+      const options = page.locator("#search-suggestions").getByRole("option");
+      await search.fill(sample.name.slice(0, -1));
+      const first = await options.first().getAttribute("data-value");
+      await search.press("ArrowDown");
+      await search.press("Enter");
+      assert((await search.inputValue()) === first, "Keyboard suggestion did not update the search");
+      const profile = page.locator("#player-dialog[open]");
+      await profile.waitFor({ state: "visible" });
+      assert((await profile.locator("#dialog-player-name").textContent()) === first, "Keyboard suggestion opened the wrong profile");
+      await profile.locator("#dialog-close-btn").click();
+      await search.fill(sample.club.slice(0, -1));
+      await options.filter({ hasText: new RegExp(`^\\s*${escapeRegex(sample.club)}Club\\s*$`) }).click();
+      assert((await search.inputValue()) === sample.club, "Club suggestion did not update the search");
+      await search.fill("");
+
+      const minimums = [["age", "age"], ["val", "value"], ["wage", "wage"]];
+      for (const [input, field] of minimums) {
+        await page.locator(`#f-min-${input}`).fill(String(sample[field]));
+      }
+      const expected = players.filter((player) => minimums.every(([, field]) =>
+        Number.isFinite(player[field]) && player[field] >= sample[field]));
+      const actual = await readPlayers();
+      assert(actual.some((player) => player.uid === sample.uid), "Minimums must include values at the boundary");
+      assert(actual.length === expected.length && actual.every((player) => expected.some((p) => p.uid === player.uid)),
+        "Minimum filters did not match the expected players");
+      await page.getByRole("button", { name: /Remove Min Age/ }).click();
+      assert(!(await page.locator("#f-min-age").inputValue()), "Chip did not clear the age minimum");
+      await (await findResetFiltersButton(page)).click();
+      assert((await readPlayers()).length === players.length, "Reset did not clear all minimums");
+      tracker.assertClean("F11-T1-07");
+      return "Player and club suggestions plus all three minimum filters verified";
+    } finally {
+      await context.close();
+    }
+  });
+
+  add("F11-T1-09", "F11", 1, async (browser) => {
+    const playerName = "Álvaro Lookup";
+    const leagueName = "League Without Starts";
+    const clubName = "Lookup FC";
+    const club = { club_uid: "99999990", club_img_id: "99999990", club: clubName, league: leagueName };
+    const player = { ...club, uid: "99999991", name: playerName, age: 32, positions: "STC",
+      position_groups: ["ST"], has_scouting_stats: false };
+    const { context, page, tracker } = await openApp(browser, baseUrl, {
+      preInitHook: async (pg) => {
+        await pg.route("**/data/meta.json", async (route) => {
+          const meta = await (await route.fetch()).json();
+          meta.has_player_search = true;
+          meta.club_catalog = [...(meta.club_catalog || []), club];
+          await route.fulfill({ json: meta });
+        });
+        await pg.route("**/data/player_search.json", (route) =>
+          route.fulfill({ json: { fields: Object.keys(player), rows: [Object.values(player)] } }));
+      },
+    });
+    try {
+      await switchPositionTab(page, "GK");
+      const search = page.locator("#f-search");
+      await search.fill("alvaro lookup");
+      const option = page.locator("#search-suggestions").getByRole("option").filter({ hasText: playerName });
+      await option.click();
+      const profile = page.locator("#player-dialog[open]");
+      await profile.waitFor({ state: "visible" });
+      assert((await profile.locator("#dialog-player-name").textContent()) === playerName, "Search did not open the player's profile");
+      assert(await profile.locator("#dialog-season-empty").isVisible(), "Missing stats status did not appear");
+      assert(!(await profile.locator("#dialog-radar-panel").isVisible()), "Profile showed a radar without results");
+      await profile.locator("#dialog-shortlist-btn").click();
+      await profile.locator("#dialog-close-btn").click();
+      await page.locator("#btn-shortlist-view").click();
+      await page.locator("#shortlist-dialog").getByRole("button", { name: playerName, exact: true }).click();
+      await profile.waitFor({ state: "visible" });
+      assert(await profile.locator("#dialog-season-empty").isVisible(), "Saved profile did not reopen");
+      await profile.locator("#dialog-close-btn").click();
+      await page.locator("#shortlist-close-btn").click();
+      await search.fill("");
+      await switchPositionTab(page, "ST");
+      await selectFirstMatchingInPopover(page, /\bleagues?\b/i, leagueName, 1);
+      await selectFirstMatchingInPopover(page, /\bclubs?\b/i, clubName, 1);
+      const squad = page.locator("#squad-results");
+      await squad.getByRole("button", { name: new RegExp(playerName) }).waitFor({ state: "visible" });
+      assert((await getMatchedCount(page)) === 0, "Squad profile leaked into the stats pool");
+      tracker.assertClean("F11-T1-09");
+      return "Save-wide lookup, missing stats, shortlist and squad profiles verified";
+    } finally {
+      await context.close();
+    }
+  });
+
+  add("F11-T1-08", "F11", 1, async (browser) => {
+    const { context, page, tracker } = await openApp(browser, baseUrl);
+    try {
+      await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+      await (await getRowShortlistStars(page)).first().click();
+      await switchPositionTab(page, "GK");
+      const keeperName = await page.locator(".tabulator-row .player-link").first().textContent();
+      await (await getRowShortlistStars(page)).first().click();
+      await switchPositionTab(page, "ST");
+      await page.locator("#btn-shortlist-view").click();
+      const shortlist = page.locator("#shortlist-dialog");
+      assert((await shortlist.locator(".shortlist-item").count()) === 2, "Expected two saved players");
+      await shortlist.locator("#shortlist-position").selectOption("GK");
+      assert((await shortlist.locator(".shortlist-item").count()) === 1, "GK filter should show one player");
+      await shortlist.getByRole("button", { name: "Copy Name" }).click();
+      assert((await page.evaluate(() => navigator.clipboard.readText())) === keeperName, "Shortlist name was not copied");
+      await shortlist.getByRole("button", { name: keeperName, exact: true }).click();
+      const profile = page.locator("#player-dialog[open]");
+      await profile.waitFor({ state: "visible" });
+      assert((await profile.locator("#dialog-player-name").textContent()) === keeperName, "Opened the wrong player");
+      assert(/Nationality/.test(await profile.locator("#dialog-profile-facts").textContent()), "Profile facts are missing");
+      assert(/Appearances[\s\S]*Save %/.test(await profile.locator("#dialog-season-stats").textContent()), "Keeper season stats are missing");
+      await profile.getByRole("button", { name: "Copy Name" }).click();
+      assert((await page.evaluate(() => navigator.clipboard.readText())) === keeperName, "Profile name was not copied");
+      await profile.locator("#dialog-close-btn").click();
+      assert((await shortlist.locator("#shortlist-position").inputValue()) === "GK", "Position filter did not persist");
+      const [download] = await Promise.all([page.waitForEvent("download"), shortlist.locator("#btn-export-shortlist").click()]);
+      const csv = fs.readFileSync(await download.path(), "utf-8");
+      assert(csv.split("\n").length === 2 && csv.includes(keeperName), "Export did not match the filtered shortlist");
+      tracker.assertClean("F11-T1-08");
+      return "Shortlist position filter, profile, clipboard and filtered CSV verified";
     } finally {
       await context.close();
     }
@@ -1329,7 +1544,9 @@ function makeTests(baseUrl) {
     for (const scheme of ["light", "dark"]) {
       const { context, page, tracker } = await openApp(browser, baseUrl, { colorScheme: scheme });
       try {
+        await selectSeasonWithManagedPlayers(page);
         const canvas = await getScatterCanvas(page);
+        await waitForChartColors(page, "#scatter-chart", scheme, ["pool-dot", "accent"]);
         urls[scheme] = await getCanvasDataUrl(canvas);
         if (scheme === "light") {
           await verifyScatterPngExport(page);
@@ -1531,9 +1748,13 @@ function makeTests(baseUrl) {
     for (const scheme of ["light", "dark"]) {
       const { context, page, tracker } = await openApp(browser, baseUrl, { colorScheme: scheme });
       try {
+        await selectSeasonWithManagedPlayers(page);
         const dlg = await openFirstProfileDialog(page);
         const canvas = dlg.locator("canvas").first();
         assert((await canvas.count()) > 0, "Radar <canvas> missing");
+        const comparison = dlg.locator("#dialog-compare-select");
+        await comparison.selectOption({ index: 1 });
+        await waitForChartColors(page, "#radar-chart", scheme, ["accent", "compare"]);
         snaps[scheme] = await getCanvasDataUrl(canvas);
         tracker.assertClean(`F14-T1-06(${scheme})`);
       } finally {

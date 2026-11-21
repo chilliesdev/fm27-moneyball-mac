@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import struct
+import tempfile
 import warnings
 from collections import Counter, defaultdict
 from datetime import datetime
@@ -711,21 +712,65 @@ def _resolve_club_leagues(
     return resolved
 
 
+def _resolve_scheduled_club_leagues(
+    fixtures: Iterable[Any],
+    clubs_by_uid: Mapping[int, Any],
+    comps_by_id: Mapping[int, Any],
+    season_start_year: int,
+) -> dict[int, tuple[str, str]]:
+    stages: dict[tuple[str, str, int], set[tuple[int, int]]] = defaultdict(set)
+    for match in fixtures:
+        if (
+            match.season_start_year != season_start_year
+            or match.stage_id is None
+            or not match.competition_name
+            or match.round is not None
+            or match.round_index is None
+            or match.home_team_slot != 0
+            or match.away_team_slot != 0
+        ):
+            continue
+        home = clubs_by_uid.get(match.home_club_uid)
+        away = clubs_by_uid.get(match.away_club_uid)
+        if (
+            home is None or away is None or home.uid == away.uid
+            or home.nation_id is None or home.nation_id != away.nation_id
+            or _is_women_club(home) or _is_women_club(away)
+        ):
+            continue
+        comp = comps_by_id.get(match.competition_id)
+        league_id = str(comp.database_id) if comp and comp.database_id is not None else ""
+        stages[(match.competition_name, league_id, match.stage_id)].add((home.uid, away.uid))
+
+    resolved: dict[int, tuple[str, str]] = {}
+    for (league, league_id, _), pairs in sorted(stages.items(), key=lambda item: -len(item[1])):
+        clubs = {uid for pair in pairs for uid in pair}
+        # Require a complete domestic home-and-away schedule before using it as a league.
+        if len(clubs) >= 6 and len(pairs) == len(clubs) * (len(clubs) - 1):
+            for uid in clubs:
+                resolved.setdefault(uid, (league, league_id))
+    return resolved
+
+
 def _safe_pct(num: float, den: float) -> float:
     return round((num / den) * 100.0, 2) if den > 0 else 0.0
 
 
-def _compute_metrics(raw: dict[str, float]) -> dict[str, float]:
-    mins = raw["minutes"]
-    nineties = mins / 90.0 if mins > 0 else 0.0
-    m: dict[str, float] = {
-        "minutes": int(round(mins)),
+def _season_totals(raw: dict[str, float]) -> dict[str, float]:
+    return {
+        "minutes": int(round(raw["minutes"])),
         "starts": int(round(raw["starts"])),
         "apps": int(round(raw["starts"] + raw["substitute_appearances"])),
         "goals": int(round(raw["goals"])),
         "assists": int(round(raw["assists"])),
         "avg_rating": round(raw["_rating_sum"] / raw["_rating_apps"], 2) if raw["_rating_apps"] > 0 else 0.0,
     }
+
+
+def _compute_metrics(raw: dict[str, float]) -> dict[str, float]:
+    mins = raw["minutes"]
+    nineties = mins / 90.0 if mins > 0 else 0.0
+    m = _season_totals(raw)
     for out_key, src_key in PER90_SOURCE_MAP.items():
         m[out_key] = round(raw[src_key] / nineties, 3) if nineties > 0 else 0.0
 
@@ -795,6 +840,17 @@ def _load_seasons_index() -> dict[str, Any]:
         return {"latest_season": None, "seasons": []}
 
 
+def _write_player_index(path: Path, payload: str) -> None:
+    file = tempfile.NamedTemporaryFile(mode="w", dir=path.parent, encoding="utf-8", delete=False)
+    temporary = Path(file.name)
+    try:
+        with file:
+            file.write(payload)
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def build_from_save(save_path: Path) -> dict[str, Any]:
     """Read a .fm save directly, archive its season snapshot, and update latest app data."""
     save_path = Path(save_path).expanduser().resolve()
@@ -839,6 +895,10 @@ def build_from_save(save_path: Path) -> dict[str, Any]:
         resolved_leagues = _resolve_club_leagues(
             career_save.league_tables(), clubs_by_uid, comps_by_id
         )
+        scheduled_leagues = _resolve_scheduled_club_leagues(
+            career_save.fixtures(), clubs_by_uid, comps_by_id, season_end_year - 1
+        )
+        resolved_leagues = scheduled_leagues | resolved_leagues
 
         players_by_uid: dict[int, Any] = {}
         for pl in career_save.players():
@@ -875,18 +935,22 @@ def build_from_save(save_path: Path) -> dict[str, Any]:
 
     pool_records: dict[str, list[dict[str, Any]]] = {group: [] for group in POSITION_GROUPS}
     squad_records: list[dict[str, Any]] = []
+    search_fields = (
+        "uid", "name", "img_id", "club_uid", "club_img_id", "club", "league", "age", "height_cm", "nation",
+        "foot", "positions", "value", "wage", "contract_end", "on_loan", "loan_parent", "minutes",
+        "apps", "starts", "goals", "assists", "avg_rating",
+    )
+    club_fields = ("club_uid", "club_img_id", "club", "league")
+    club_catalog: dict[str, dict[str, Any]] = {}
+    search_rows: list[list[Any]] = []
 
-    for uid, raw_stats in stats_agg.items():
-        if raw_stats["minutes"] < MIN_MINUTES_DATASET:
-            continue
+    for uid in dict.fromkeys((*stats_agg, *players_by_uid)):
         pl = players_by_uid.get(uid)
         if pl is None:
             continue
+        raw_stats = stats_agg.get(uid)
         groups = _player_groups(pl.natural_positions or ())
-        if not groups:
-            continue
-
-        metrics = _compute_metrics(raw_stats)
+        has_scouting_stats = bool(groups and raw_stats and raw_stats["minutes"] >= MIN_MINUTES_DATASET)
         contract = pl.contract
         squad_status = ""
         if contract and contract.squad_status:
@@ -954,8 +1018,17 @@ def build_from_save(save_path: Path) -> dict[str, Any]:
             "contract_end": contract.end.isoformat() if (contract and contract.end) else "",
             "squad_status": squad_status,
             "is_hull": is_managed,
-            **metrics,
         }
+        if raw_stats:
+            base_record.update(_compute_metrics(raw_stats) if has_scouting_stats else _season_totals(raw_stats))
+
+        if pl.name:
+            # Store field names once so searching the full save uses a compact download.
+            search_rows.append([base_record.get(field) for field in search_fields] + [groups, has_scouting_stats])
+        club_catalog.setdefault(club_uid_str, {field: base_record[field] for field in club_fields})
+
+        if not has_scouting_stats:
+            continue
 
         if is_managed:
             squad_records.append(base_record)
@@ -1030,6 +1103,18 @@ def build_from_save(save_path: Path) -> dict[str, Any]:
             writer.writeheader()
             writer.writerows(squad_records)
 
+    for uid, (league, _) in resolved_leagues.items():
+        key = str(uid)
+        if key in club_catalog:
+            continue
+        club = clubs_by_uid[uid]
+        club_catalog[key] = {
+            "club_uid": key,
+            "club_img_id": str(club.unique_id) if club.unique_id is not None else key,
+            "club": club.short_name or club.name,
+            "league": league,
+        }
+
     meta = {
         "season": season_key,
         "season_end_year": season_end_year,
@@ -1046,12 +1131,23 @@ def build_from_save(save_path: Path) -> dict[str, Any]:
         "positions": summary,
         "all_metrics": all_metrics,
         "hull_squad": squad_records,
+        "club_catalog": list(club_catalog.values()),
+        "has_player_search": True,
     }
+    search_filename = "player_search.json"
+    search_payload = json.dumps(
+        {"fields": (*search_fields, "position_groups", "has_scouting_stats"), "rows": search_rows},
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    _write_player_index(data_dir / search_filename, search_payload)
+    _write_player_index(APP_DATA_DIR / search_filename, search_payload)
     (data_dir / "meta.json").write_text(json.dumps(meta, separators=(",", ":")), encoding="utf-8")
 
     # Sync latest season to app/data/ fallback
     for json_file in data_dir.glob("*.json"):
-        shutil.copy2(json_file, APP_DATA_DIR / json_file.name)
+        if json_file.name != search_filename:
+            shutil.copy2(json_file, APP_DATA_DIR / json_file.name)
 
     # Update progressive seasons index
     index = _load_seasons_index()
