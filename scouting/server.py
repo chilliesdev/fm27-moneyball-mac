@@ -75,7 +75,7 @@ _SVG_PALETTE: tuple[tuple[str, str], ...] = (
     ("#7e22ce", "#c084fc"),
 )
 
-_LOCK = threading.Lock()
+_LOCK = threading.RLock()
 _STATE: dict[str, Any] = {
     "building": False,
     "last_error": None,
@@ -610,48 +610,109 @@ def _read_status(graphics_index: GraphicsIndex | None = None) -> dict[str, Any]:
     elif newest and not latest_entry:
         stale = True
 
+    with _LOCK:
+        building = _STATE["building"]
+        last_error = _STATE["last_error"]
+        last_built = _STATE["last_built"]
+
     payload: dict[str, Any] = {
         "saves": saves,
         "latest_season": seasons_index.get("latest_season"),
         "seasons": seasons_index.get("seasons", []),
         "newest_save_stale": stale,
-        "building": _STATE["building"],
-        "last_error": _STATE["last_error"],
-        "last_built": _STATE["last_built"],
+        "building": building,
+        "last_error": last_error,
+        "last_built": last_built,
     }
     if graphics_index is not None:
         payload["graphics"] = graphics_index.status()
     return payload
 
 
-def _trigger_build(
-    save_path_str: str | None, graphics_index: GraphicsIndex | None = None
-) -> dict[str, Any]:
-    if graphics_index is not None:
-        graphics_index.trigger_refresh()
-
-    with _LOCK:
-        if _STATE["building"]:
-            return {"started": False, "reason": "already_building", **_read_status(graphics_index)}
-        _STATE["building"] = True
-        _STATE["last_error"] = None
+def _validate_save_path(raw_path: str | None) -> Path:
+    """Validate and resolve a requested .fm save path, or pick the latest save."""
+    if raw_path is None or not raw_path.strip():
+        return build_moneyball.pick_latest_save()
 
     try:
-        target = Path(save_path_str) if save_path_str else build_moneyball.pick_latest_save()
+        candidate = Path(raw_path).expanduser().resolve(strict=True)
+    except OSError as exc:
+        raise ValueError("Save file does not exist") from exc
+
+    if not candidate.is_file() or candidate.suffix.lower() != ".fm":
+        raise ValueError("Save path must be an existing .fm file")
+
+    allowed_roots: list[Path] = []
+    try:
+        allowed_roots.append(build_moneyball.DEFAULT_GAMES_DIR.resolve())
+    except OSError:
+        pass
+    for entry in build_moneyball.list_fm_saves():
+        try:
+            allowed_roots.append(Path(entry["path"]).resolve().parent)
+        except (KeyError, OSError):
+            continue
+
+    if not any(candidate.is_relative_to(root) for root in allowed_roots):
+        raise ValueError("Save path is outside the allowed saves directory")
+    return candidate
+
+
+def _run_build_job(target: Path) -> None:
+    try:
         meta = build_moneyball.build_from_save(target)
-        _STATE["last_built"] = {
+        built = {
             "season": meta["season"],
             "in_game_date": meta["in_game_date"],
             "save_file": meta["save_file"],
             "club_name": meta["club_name"],
         }
-        return {"started": True, "meta": _STATE["last_built"], **_read_status(graphics_index)}
+        with _LOCK:
+            _STATE["last_built"] = built
     except Exception as exc:
-        _STATE["last_error"] = f"{type(exc).__name__}: {exc}"
-        return {"started": False, "error": _STATE["last_error"], **_read_status(graphics_index)}
+        with _LOCK:
+            _STATE["last_error"] = f"{type(exc).__name__}: {exc}"
     finally:
         with _LOCK:
             _STATE["building"] = False
+
+
+def _trigger_build(
+    save_path_str: str | None, graphics_index: GraphicsIndex | None = None
+) -> tuple[int, dict[str, Any]]:
+    if graphics_index is not None:
+        graphics_index.trigger_refresh()
+
+    try:
+        target = _validate_save_path(save_path_str)
+    except (ValueError, FileNotFoundError) as exc:
+        msg = f"{type(exc).__name__}: {exc}"
+        with _LOCK:
+            _STATE["last_error"] = msg
+        return HTTPStatus.BAD_REQUEST, {
+            "started": False,
+            "error": msg,
+            **_read_status(graphics_index),
+        }
+
+    with _LOCK:
+        if _STATE["building"]:
+            return HTTPStatus.OK, {
+                "started": False,
+                "reason": "already_building",
+                **_read_status(graphics_index),
+            }
+        _STATE["building"] = True
+        _STATE["last_error"] = None
+
+    worker = threading.Thread(
+        target=_run_build_job,
+        args=(target,),
+        name="moneyball-build",
+        daemon=True,
+    )
+    worker.start()
+    return HTTPStatus.ACCEPTED, {"started": True, **_read_status(graphics_index)}
 
 
 class ScoutHTTPServer(ThreadingHTTPServer):
@@ -927,17 +988,19 @@ class ScoutHandler(SimpleHTTPRequestHandler):
                 self._send_json({"error": "Invalid save_path"}, HTTPStatus.BAD_REQUEST)
                 return
 
-            result = _trigger_build(save_path, self.graphics_index)
-            status_code = (
-                HTTPStatus.INTERNAL_SERVER_ERROR if result.get("error") else HTTPStatus.OK
-            )
+            status_code, result = _trigger_build(save_path, self.graphics_index)
             self._send_json(result, status_code)
             return
         self._send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
 
+    def log_error(self, format: str, *args: Any) -> None:
+        sys.stderr.write(f"[ScoutHTTP] {self.address_string()} - {format % args}\n")
+        sys.stderr.flush()
+
     def log_message(self, format: str, *args: Any) -> None:
-        # Keep daemon log quiet unless error
-        pass
+        if getattr(self, "_last_status_code", 200) >= 400:
+            sys.stderr.write(f"[ScoutHTTP] {self.address_string()} - {format % args}\n")
+            sys.stderr.flush()
 
 
 def _resolve_port(cli_port: int | None) -> int:

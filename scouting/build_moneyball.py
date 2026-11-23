@@ -840,7 +840,9 @@ def _load_seasons_index() -> dict[str, Any]:
         return {"latest_season": None, "seasons": []}
 
 
-def _write_player_index(path: Path, payload: str) -> None:
+def _write_text_atomic(path: Path, payload: str) -> None:
+    """Write text to a temporary file in the same directory and atomically replace target."""
+    path.parent.mkdir(parents=True, exist_ok=True)
     file = tempfile.NamedTemporaryFile(mode="w", dir=path.parent, encoding="utf-8", delete=False)
     temporary = Path(file.name)
     try:
@@ -851,16 +853,98 @@ def _write_player_index(path: Path, payload: str) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def build_from_save(save_path: Path) -> dict[str, Any]:
-    """Read a .fm save directly, archive its season snapshot, and update latest app data."""
-    save_path = Path(save_path).expanduser().resolve()
-    if not save_path.exists():
-        raise FileNotFoundError(f"Save file not found: {save_path}")
+def _write_json_atomic(path: Path, data: Any, *, indent: int | None = None) -> None:
+    kwargs: dict[str, Any] = {"ensure_ascii": False}
+    if indent is None:
+        kwargs["separators"] = (",", ":")
+    else:
+        kwargs["indent"] = indent
+    _write_text_atomic(path, json.dumps(data, **kwargs))
 
-    save_stat = save_path.stat()
-    warnings.simplefilter("ignore")
-    comp_names, nation_names = load_fm27_names()
 
+def _club_reputation_map(
+    save_path: Path,
+    info: Any,
+    clubs_in_order: Iterable[Any],
+) -> dict[int, int]:
+    """Return {club_uid: reputation}, recovering from game_db if fmsave status walk missed the table."""
+    clubs = list(clubs_in_order)
+    reps = {c.uid: int(c.reputation) for c in clubs if c.reputation}
+    if len(reps) >= max(10, len(clubs) // 4):
+        return reps
+
+    try:
+        from fmsave._container import read_index, read_section
+        from fmsave._layouts import ClubStatusLayout, find_layout
+
+        game_db_schema = (getattr(info, "section_schemas", None) or {}).get("game_db")
+        build = getattr(info, "build", "") or ""
+        layout = find_layout(ClubStatusLayout, "game_db", game_db_schema, build).layout
+        idx = read_index(save_path)
+        gdb = read_section(idx, "game_db")
+    except Exception:
+        return reps
+
+    buf_len = len(gdb)
+    zero_prefix = b"\x00" * layout.confirmation_zero_bytes
+    zero_rel_offset = layout.ordinal_offset - layout.confirmation_zero_bytes
+    window_span = layout.search_window_bytes + 8
+    recovered: dict[int, int] = {}
+    cursor = 0
+    prev_ordinal = -1
+    started = False
+    leading_misses = 0
+
+    for club in clubs:
+        if club.uid <= 0:
+            continue
+        stored_uid = club.uid - 1
+        pat = struct.pack("<II", stored_uid, stored_uid)
+        search_end = min(buf_len, cursor + window_span) if started else buf_len
+        hit = gdb.find(pat, cursor, search_end)
+        accepted = False
+        while hit >= 0:
+            ord_at = hit + layout.ordinal_offset
+            kind_at = hit + layout.kind_offset
+            zero_at = hit + zero_rel_offset
+            if 0 <= ord_at and kind_at < buf_len and (started or (zero_at >= 0 and gdb.startswith(zero_prefix, zero_at))):
+                ordinal = struct.unpack_from("<I", gdb, ord_at)[0]
+                kind = gdb[kind_at]
+                if prev_ordinal < ordinal < layout.ordinal_limit and kind in (layout.normal_kind, layout.stub_kind):
+                    accepted = True
+                    prev_ordinal = ordinal
+                    cursor = kind_at
+                    if kind == layout.normal_kind:
+                        rep_at = hit + layout.reputation_offset
+                        if rep_at + 2 <= buf_len:
+                            rep = struct.unpack_from("<H", gdb, rep_at)[0]
+                            lo_rep, hi_rep = layout.reputation_range
+                            if lo_rep <= rep <= hi_rep:
+                                recovered[club.uid] = rep
+                    break
+            hit = gdb.find(pat, hit + 1, search_end)
+        if accepted:
+            started = True
+        elif not started:
+            leading_misses += 1
+            if leading_misses >= layout.maximum_leading_misses:
+                break
+
+    return recovered if len(recovered) > len(reps) else reps
+
+
+_SEARCH_FIELDS: tuple[str, ...] = (
+    "uid", "name", "img_id", "club_uid", "club_img_id", "club", "league", "age", "height_cm", "nation",
+    "foot", "positions", "value", "wage", "contract_end", "on_loan", "loan_parent", "minutes",
+    "apps", "starts", "goals", "assists", "avg_rating",
+)
+
+
+def _load_save_snapshot(
+    save_path: Path,
+    comp_names: dict[int, str],
+    nation_names: dict[int, str],
+) -> dict[str, Any]:
     with fmsave.open(save_path, competition_names=comp_names or None) as career_save:
         info = career_save.info
         game_date = info.game_date
@@ -874,9 +958,11 @@ def build_from_save(save_path: Path) -> dict[str, Any]:
         managed_name = managed.club_name if managed else "Unknown Club"
         managed_short = managed.club_short_name if managed else managed_name
 
-        clubs_by_uid = {c.uid: c for c in career_save.clubs()}
+        clubs_in_order = list(career_save.clubs())
+        clubs_by_uid = {c.uid: c for c in clubs_in_order}
+        club_reps = _club_reputation_map(save_path, info, clubs_in_order)
         managed_club_obj = clubs_by_uid.get(managed.club_uid) if managed else None
-        managed_rep = (managed_club_obj.reputation or 0) if managed_club_obj else 0
+        managed_rep = club_reps.get(managed.club_uid, 0) if managed else 0
         managed_club_img_id = (
             str(
                 managed_club_obj.unique_id
@@ -926,23 +1012,46 @@ def build_from_save(save_path: Path) -> dict[str, Any]:
                 bucket["_rating_sum"] += avg * rated
                 bucket["_rating_apps"] += rated
 
-    season_dir = SEASONS_DIR / season_key
-    csv_dir = season_dir / "csv"
-    data_dir = season_dir / "data"
-    csv_dir.mkdir(parents=True, exist_ok=True)
-    data_dir.mkdir(parents=True, exist_ok=True)
-    APP_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    return {
+        "game_date_str": game_date_str,
+        "season_key": season_key,
+        "season_end_year": season_end_year,
+        "managed_uid": managed_uid,
+        "managed_name": managed_name,
+        "managed_short": managed_short,
+        "managed_rep": managed_rep,
+        "managed_club_img_id": managed_club_img_id,
+        "manager_name": managed.manager_name if managed else "",
+        "clubs_by_uid": clubs_by_uid,
+        "club_reps": club_reps,
+        "nations_by_id": nations_by_id,
+        "resolved_leagues": resolved_leagues,
+        "players_by_uid": players_by_uid,
+        "stats_agg": stats_agg,
+    }
 
+
+def _build_player_records(
+    snapshot: dict[str, Any],
+) -> tuple[
+    dict[str, list[dict[str, Any]]],
+    list[dict[str, Any]],
+    list[list[Any]],
+    dict[str, dict[str, Any]],
+]:
     pool_records: dict[str, list[dict[str, Any]]] = {group: [] for group in POSITION_GROUPS}
     squad_records: list[dict[str, Any]] = []
-    search_fields = (
-        "uid", "name", "img_id", "club_uid", "club_img_id", "club", "league", "age", "height_cm", "nation",
-        "foot", "positions", "value", "wage", "contract_end", "on_loan", "loan_parent", "minutes",
-        "apps", "starts", "goals", "assists", "avg_rating",
-    )
     club_fields = ("club_uid", "club_img_id", "club", "league")
     club_catalog: dict[str, dict[str, Any]] = {}
     search_rows: list[list[Any]] = []
+
+    clubs_by_uid = snapshot["clubs_by_uid"]
+    club_reps = snapshot["club_reps"]
+    nations_by_id = snapshot["nations_by_id"]
+    resolved_leagues = snapshot["resolved_leagues"]
+    players_by_uid = snapshot["players_by_uid"]
+    stats_agg = snapshot["stats_agg"]
+    managed_uid = snapshot["managed_uid"]
 
     for uid in dict.fromkeys((*stats_agg, *players_by_uid)):
         pl = players_by_uid.get(uid)
@@ -1007,7 +1116,7 @@ def build_from_save(save_path: Path) -> dict[str, Any]:
             "club_uid": club_uid_str,
             "club_img_id": club_img_id,
             "club": pl.club_short_name or pl.club_name or "Free Agent",
-            "club_rep": pl.club_reputation or 0,
+            "club_rep": club_reps.get(pl.club_uid, pl.club_reputation or 0) if pl.club_uid is not None else 0,
             "league": league,
             "league_id": league_id,
             "on_loan": bool(pl.on_loan),
@@ -1017,6 +1126,7 @@ def build_from_save(save_path: Path) -> dict[str, Any]:
             "wage": contract.wage if contract else None,
             "contract_end": contract.end.isoformat() if (contract and contract.end) else "",
             "squad_status": squad_status,
+            # Legacy key kept for client/test schema compatibility.
             "is_hull": is_managed,
         }
         if raw_stats:
@@ -1024,7 +1134,7 @@ def build_from_save(save_path: Path) -> dict[str, Any]:
 
         if pl.name:
             # Store field names once so searching the full save uses a compact download.
-            search_rows.append([base_record.get(field) for field in search_fields] + [groups, has_scouting_stats])
+            search_rows.append([base_record.get(field) for field in _SEARCH_FIELDS] + [groups, has_scouting_stats])
         club_catalog.setdefault(club_uid_str, {field: base_record[field] for field in club_fields})
 
         if not has_scouting_stats:
@@ -1035,10 +1145,28 @@ def build_from_save(save_path: Path) -> dict[str, Any]:
         for group in groups:
             pool_records[group].append(dict(base_record))
 
-    all_metrics = _materialize_all_metrics(
-        [r for recs in pool_records.values() for r in recs] + squad_records
-    )
+    for uid, (league, _) in resolved_leagues.items():
+        key = str(uid)
+        if key in club_catalog:
+            continue
+        club = clubs_by_uid[uid]
+        club_catalog[key] = {
+            "club_uid": key,
+            "club_img_id": str(club.unique_id) if club.unique_id is not None else key,
+            "club": club.short_name or club.name,
+            "league": league,
+        }
 
+    return pool_records, squad_records, search_rows, club_catalog
+
+
+def _score_and_write_groups(
+    pool_records: dict[str, list[dict[str, Any]]],
+    all_metrics: list[dict[str, Any]],
+    season_key: str,
+    csv_dir: Path,
+    data_dir: Path,
+) -> dict[str, dict[str, int]]:
     summary: dict[str, dict[str, int]] = {}
     for group, records in pool_records.items():
         baseline = [r for r in records if int(r["minutes"]) >= MIN_MINUTES_BASELINE]
@@ -1089,12 +1217,66 @@ def build_from_save(save_path: Path) -> dict[str, Any]:
             },
             "players": records,
         }
-        (data_dir / f"{group}.json").write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+        _write_json_atomic(data_dir / f"{group}.json", payload)
         summary[group] = {
             "total_450": len(records),
             "baseline_900": len(baseline),
             "hull_count": sum(1 for r in records if r["is_hull"]),
         }
+    return summary
+
+
+def _update_seasons_index(
+    save_path: Path,
+    save_stat: os.stat_result,
+    snapshot: dict[str, Any],
+) -> None:
+    season_key = snapshot["season_key"]
+    index = _load_seasons_index()
+    entries: list[dict[str, Any]] = [
+        e for e in index.get("seasons", []) if e.get("season") != season_key
+    ]
+    entries.append(
+        {
+            "season": season_key,
+            "in_game_date": snapshot["game_date_str"],
+            "save_file": save_path.name,
+            "save_path": str(save_path),
+            "save_mtime": save_stat.st_mtime,
+            "club_name": snapshot["managed_name"],
+            "club_short_name": snapshot["managed_short"],
+            "club_uid": snapshot["managed_uid"],
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+        }
+    )
+    entries.sort(key=lambda e: str(e.get("season", "")), reverse=True)
+    _write_json_atomic(SEASONS_DIR / "index.json", {"latest_season": season_key, "seasons": entries}, indent=2)
+
+
+def build_from_save(save_path: Path) -> dict[str, Any]:
+    """Read a .fm save directly, archive its season snapshot, and update latest app data."""
+    save_path = Path(save_path).expanduser().resolve()
+    if not save_path.exists():
+        raise FileNotFoundError(f"Save file not found: {save_path}")
+
+    save_stat = save_path.stat()
+    warnings.simplefilter("ignore")
+    comp_names, nation_names = load_fm27_names()
+    snapshot = _load_save_snapshot(save_path, comp_names, nation_names)
+    season_key = snapshot["season_key"]
+
+    season_dir = SEASONS_DIR / season_key
+    csv_dir = season_dir / "csv"
+    data_dir = season_dir / "data"
+    csv_dir.mkdir(parents=True, exist_ok=True)
+    data_dir.mkdir(parents=True, exist_ok=True)
+    APP_DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    pool_records, squad_records, search_rows, club_catalog = _build_player_records(snapshot)
+    all_metrics = _materialize_all_metrics(
+        [r for recs in pool_records.values() for r in recs] + squad_records
+    )
+    summary = _score_and_write_groups(pool_records, all_metrics, season_key, csv_dir, data_dir)
 
     squad_records.sort(key=lambda r: int(r["minutes"]), reverse=True)
     if squad_records:
@@ -1103,28 +1285,16 @@ def build_from_save(save_path: Path) -> dict[str, Any]:
             writer.writeheader()
             writer.writerows(squad_records)
 
-    for uid, (league, _) in resolved_leagues.items():
-        key = str(uid)
-        if key in club_catalog:
-            continue
-        club = clubs_by_uid[uid]
-        club_catalog[key] = {
-            "club_uid": key,
-            "club_img_id": str(club.unique_id) if club.unique_id is not None else key,
-            "club": club.short_name or club.name,
-            "league": league,
-        }
-
     meta = {
         "season": season_key,
-        "season_end_year": season_end_year,
-        "club_name": managed_name,
-        "club_short_name": managed_short,
-        "club_uid": managed_uid,
-        "club_img_id": managed_club_img_id,
-        "club_reputation": managed_rep,
-        "manager_name": managed.manager_name if managed else "",
-        "in_game_date": game_date_str,
+        "season_end_year": snapshot["season_end_year"],
+        "club_name": snapshot["managed_name"],
+        "club_short_name": snapshot["managed_short"],
+        "club_uid": snapshot["managed_uid"],
+        "club_img_id": snapshot["managed_club_img_id"],
+        "club_reputation": snapshot["managed_rep"],
+        "manager_name": snapshot["manager_name"],
+        "in_game_date": snapshot["game_date_str"],
         "save_file": save_path.name,
         "save_path": str(save_path),
         "save_mtime": save_stat.st_mtime,
@@ -1136,40 +1306,20 @@ def build_from_save(save_path: Path) -> dict[str, Any]:
     }
     search_filename = "player_search.json"
     search_payload = json.dumps(
-        {"fields": (*search_fields, "position_groups", "has_scouting_stats"), "rows": search_rows},
+        {"fields": (*_SEARCH_FIELDS, "position_groups", "has_scouting_stats"), "rows": search_rows},
         separators=(",", ":"),
         ensure_ascii=False,
     )
-    _write_player_index(data_dir / search_filename, search_payload)
-    _write_player_index(APP_DATA_DIR / search_filename, search_payload)
-    (data_dir / "meta.json").write_text(json.dumps(meta, separators=(",", ":")), encoding="utf-8")
+    _write_text_atomic(data_dir / search_filename, search_payload)
+    _write_text_atomic(APP_DATA_DIR / search_filename, search_payload)
+    _write_json_atomic(data_dir / "meta.json", meta)
 
     # Sync latest season to app/data/ fallback
     for json_file in data_dir.glob("*.json"):
         if json_file.name != search_filename:
             shutil.copy2(json_file, APP_DATA_DIR / json_file.name)
 
-    # Update progressive seasons index
-    index = _load_seasons_index()
-    entries: list[dict[str, Any]] = [
-        e for e in index.get("seasons", []) if e.get("season") != season_key
-    ]
-    entries.append(
-        {
-            "season": season_key,
-            "in_game_date": game_date_str,
-            "save_file": save_path.name,
-            "save_path": str(save_path),
-            "save_mtime": save_stat.st_mtime,
-            "club_name": managed_name,
-            "club_short_name": managed_short,
-            "club_uid": managed_uid,
-            "updated_at": datetime.now().isoformat(timespec="seconds"),
-        }
-    )
-    entries.sort(key=lambda e: str(e.get("season", "")), reverse=True)
-    index = {"latest_season": season_key, "seasons": entries}
-    (SEASONS_DIR / "index.json").write_text(json.dumps(index, indent=2), encoding="utf-8")
+    _update_seasons_index(save_path, save_stat, snapshot)
     return meta
 
 

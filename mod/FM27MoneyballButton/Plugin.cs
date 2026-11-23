@@ -3,6 +3,8 @@ using System.Diagnostics;
 using System.IO;
 using System.Net.Sockets;
 using System.Reflection;
+using System.Threading;
+using System.Threading.Tasks;
 using BepInEx;
 using BepInEx.Logging;
 using BepInEx.Unity.IL2CPP;
@@ -18,6 +20,8 @@ public class Plugin : BasePlugin
 {
     internal static ManualLogSource Logger;
     private const string DashboardUrl = "http://127.0.0.1:8727/?auto_refresh=1";
+    private const int ServerPort = 8727;
+    private static int _launching;
 
     public override void Load()
     {
@@ -65,41 +69,83 @@ public class Plugin : BasePlugin
         return (pythonBin, serverScript);
     }
 
+    private static void LaunchBrowser()
+    {
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = "/usr/bin/open",
+            Arguments = $"\"{DashboardUrl}\"",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        });
+        Logger.LogInfo("Opened Moneyball dashboard.");
+    }
+
     internal static void OpenMoneyballDashboard()
     {
+        if (Interlocked.CompareExchange(ref _launching, 1, 0) != 0)
+            return;
+
         try
         {
-            if (!IsPortOpen("127.0.0.1", 8727))
+            if (IsPortOpen("127.0.0.1", ServerPort))
             {
-                var (pythonBin, serverScript) = ResolveServerPaths();
-                if (!File.Exists(serverScript))
-                {
-                    Logger.LogError($"Moneyball server script not found: {serverScript}");
-                    return;
-                }
+                LaunchBrowser();
+                Interlocked.Exchange(ref _launching, 0);
+                return;
+            }
 
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = pythonBin,
-                    Arguments = $"\"{serverScript}\"",
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                });
+            var (pythonBin, serverScript) = ResolveServerPaths();
+            if (!File.Exists(serverScript))
+            {
+                Logger.LogError($"Moneyball server script not found: {serverScript}");
+                Interlocked.Exchange(ref _launching, 0);
+                return;
             }
 
             Process.Start(new ProcessStartInfo
             {
-                FileName = "/usr/bin/open",
-                Arguments = $"\"{DashboardUrl}\"",
+                FileName = pythonBin,
+                Arguments = $"\"{serverScript}\"",
                 UseShellExecute = false,
                 CreateNoWindow = true,
             });
-            Logger.LogInfo("Opened Moneyball dashboard.");
+
+            Task.Run(() =>
+            {
+                try
+                {
+                    if (!WaitForPort("127.0.0.1", ServerPort, timeoutMs: 3000))
+                        Logger.LogWarning($"Moneyball server did not listen on port {ServerPort} within 3s; opening browser anyway.");
+                    LaunchBrowser();
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogError($"Failed to open Moneyball dashboard: {ex}");
+                }
+                finally
+                {
+                    Interlocked.Exchange(ref _launching, 0);
+                }
+            });
         }
         catch (Exception ex)
         {
+            Interlocked.Exchange(ref _launching, 0);
             Logger.LogError($"Failed to open Moneyball dashboard: {ex}");
         }
+    }
+
+    private static bool WaitForPort(string host, int port, int timeoutMs)
+    {
+        var sw = Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < timeoutMs)
+        {
+            if (IsPortOpen(host, port))
+                return true;
+            Thread.Sleep(50);
+        }
+        return IsPortOpen(host, port);
     }
 
     private static bool IsPortOpen(string host, int port)

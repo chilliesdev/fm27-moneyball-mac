@@ -196,7 +196,16 @@
 
         <label class="field">
           <span>Min Transfer Value (£)</span>
-          <input type="number" id="f-min-val" min="0" step="1" placeholder="Any value">
+          <select id="f-min-val">
+            <option value="" selected>Any Value</option>
+            <option value="500000">&ge; 500k</option>
+            <option value="1000000">&ge; 1M</option>
+            <option value="5000000">&ge; 5M</option>
+            <option value="10000000">&ge; 10M</option>
+            <option value="15000000">&ge; 15M</option>
+            <option value="25000000">&ge; 25M</option>
+            <option value="50000000">&ge; 50M</option>
+          </select>
         </label>
 
         <label class="field">
@@ -214,7 +223,16 @@
 
         <label class="field">
           <span>Min Weekly Wage (£)</span>
-          <input type="number" id="f-min-wage" min="0" step="1" placeholder="Any wage">
+          <select id="f-min-wage">
+            <option value="" selected>Any Wage</option>
+            <option value="1000">&ge; 1k/wk</option>
+            <option value="5000">&ge; 5k/wk</option>
+            <option value="10000">&ge; 10k/wk</option>
+            <option value="15000">&ge; 15k/wk</option>
+            <option value="30000">&ge; 30k/wk</option>
+            <option value="50000">&ge; 50k/wk</option>
+            <option value="80000">&ge; 80k/wk</option>
+          </select>
         </label>
 
         <label class="field">
@@ -462,6 +480,6 @@
 
   <script src="vendor/echarts/echarts.min.js"></script>
   <script src="vendor/tabulator/tabulator.min.js"></script>
-  <script src="app.js?v=5"></script>
+  <script type="module" src="app.js?v=6"></script>
 </body>
 </html>
