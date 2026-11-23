@@ -8,6 +8,7 @@ import {
   clubNameOf,
   escapeHtml,
   formatMoney,
+  formatPlayerValue,
   formatStat,
   parsePlayerPositions,
   pctClass,
@@ -41,6 +42,15 @@ function updatePrevNextButtons(player, dataset) {
   const canStep = Boolean(dataset) && idx >= 0 && rows.length > 1;
   els.dialogPrevPlayer.disabled = !canStep || idx <= 0;
   els.dialogNextPlayer.disabled = !canStep || idx >= rows.length - 1;
+  if (els.dialogRowPos) {
+    if (Boolean(dataset) && idx >= 0) {
+      els.dialogRowPos.textContent = `${idx + 1} / ${rows.length}`;
+      els.dialogRowPos.hidden = false;
+    } else {
+      els.dialogRowPos.textContent = "";
+      els.dialogRowPos.hidden = true;
+    }
+  }
 }
 
 export function stepPlayerDialog(delta, loadPositionFn) {
@@ -66,13 +76,15 @@ export function openPlayerDialog(player, dataset, season = state.season, loadPos
   els.dialogName.textContent = playerName(player);
   els.dialogCopyName.disabled = !player.name;
   els.dialogMeta.textContent = [clubNameOf(player), player.league].filter(Boolean).join(" · ");
+  const accomplishedList = parsePlayerPositions(player.accomplished);
   renderProfileFacts(els.dialogProfileFacts, [
     ["Age", player.age],
     ["Nationality", player.nation || "—"],
     ["Height", player.height_cm > 0 ? `${player.height_cm} cm` : "—"],
     ["Preferred Foot", player.foot || "—"],
     ["Natural Positions", parsePlayerPositions(player.positions).join(", ") || "—"],
-    ["Transfer Value", formatMoney(player.value)],
+    ...(accomplishedList.length ? [["Accomplished", accomplishedList.join(", ")]] : []),
+    ["Transfer Value", formatPlayerValue(player)],
     ["Weekly Wage", formatMoney(player.wage)],
     ["Contract Ends", player.contract_end || "—"],
     ...(player.on_loan ? [["On Loan From", player.loan_parent || "—"]] : []),
@@ -96,6 +108,12 @@ export function openPlayerDialog(player, dataset, season = state.season, loadPos
 
   const isSaved = Boolean(state.shortlist[player.uid]);
   els.dialogShortlistBtn.textContent = isSaved ? "Remove from Shortlist" : "Add to Shortlist";
+  if (els.dialogPinCompare) {
+    const isPinned = state.pinnedCompare?.uid === player.uid;
+    els.dialogPinCompare.textContent = isPinned ? "Unpin Compare" : "Pin Compare";
+    els.dialogPinCompare.setAttribute("aria-pressed", String(isPinned));
+    els.dialogPinCompare.hidden = !dataset;
+  }
   els.dialogRadarPanel.hidden = !dataset;
   els.dialogProfileMetrics.hidden = !dataset;
   if (!dataset) {
@@ -108,13 +126,19 @@ export function openPlayerDialog(player, dataset, season = state.season, loadPos
   const hullOther = (managedSquad || []).filter(
     (p) => p.uid !== player.uid && !hullPool.some((h) => h.uid === p.uid)
   );
-  const shortlistCompare = dataset.players.filter(
-    (p) =>
-      p.uid !== player.uid &&
-      Boolean(state.shortlist[p.uid]) &&
-      !hullPool.some((h) => h.uid === p.uid) &&
-      !hullOther.some((h) => h.uid === p.uid)
-  );
+  const seenCompareUids = new Set([player.uid, ...hullPool.map((h) => h.uid), ...hullOther.map((h) => h.uid)]);
+  const pinnedCmp =
+    state.pinnedCompare &&
+    state.pinnedCompare.position === dataset.position &&
+    !seenCompareUids.has(state.pinnedCompare.player.uid)
+      ? state.pinnedCompare.player
+      : null;
+  if (pinnedCmp) seenCompareUids.add(pinnedCmp.uid);
+  const shortlistCompare = dataset.players.filter((p) => {
+    if (seenCompareUids.has(p.uid) || !state.shortlist[p.uid]) return false;
+    seenCompareUids.add(p.uid);
+    return true;
+  });
   els.dialogCompareSelect.innerHTML = [
     `<option value="">No comparison</option>`,
     ...hullPool.map(
@@ -123,6 +147,13 @@ export function openPlayerDialog(player, dataset, season = state.season, loadPos
     ...hullOther.map(
       (h) => `<option value="${escapeHtml(h.uid)}">${escapeHtml(playerName(h))} (${escapeHtml(h.positions)}, ${h.minutes}m)</option>`
     ),
+    ...(pinnedCmp
+      ? [
+          `<optgroup label="Pinned"><option value="${escapeHtml(pinnedCmp.uid)}">${escapeHtml(
+            playerName(pinnedCmp)
+          )} (${escapeHtml(clubNameOf(pinnedCmp))}, ${pinnedCmp.minutes}m)</option></optgroup>`,
+        ]
+      : []),
     ...(shortlistCompare.length
       ? [
           `<optgroup label="Shortlisted">${shortlistCompare
@@ -136,7 +167,9 @@ export function openPlayerDialog(player, dataset, season = state.season, loadPos
   ].join("");
 
   const benchUid = els.benchmark.value;
-  if (benchUid && benchUid !== player.uid) {
+  if (pinnedCmp) {
+    els.dialogCompareSelect.value = pinnedCmp.uid;
+  } else if (benchUid && benchUid !== player.uid) {
     els.dialogCompareSelect.value = benchUid;
   }
 
@@ -148,6 +181,7 @@ export function openPlayerDialog(player, dataset, season = state.season, loadPos
     const cmp =
       hullPool.find((h) => h.uid === cid) ||
       hullOther.find((h) => h.uid === cid) ||
+      (pinnedCmp?.uid === cid ? pinnedCmp : null) ||
       shortlistCompare.find((s) => s.uid === cid) ||
       null;
     const clubLabel = cmp?.is_hull && season === state.season ? state.meta?.club_short_name || "Club" : clubNameOf(cmp);
@@ -203,10 +237,13 @@ export function toggleRowShortlist(player, position = state.pos, season = state.
     avg_rating: player.avg_rating,
     active_score: player.active_score,
     value: player.value,
+    value_state: player.value_state,
     wage: player.wage,
     contract_end: player.contract_end,
     pos_group: position,
     season,
+    note: "",
+    added_at: Date.now(),
     ...(position ? {} : { profile: player }),
   };
   saveShortlist();
@@ -215,10 +252,47 @@ export function toggleRowShortlist(player, position = state.pos, season = state.
   return true;
 }
 
+function enrichShortlistEntry(entry) {
+  const filteredMatch = state.filtered?.find((r) => r.uid === entry.uid);
+  const cachedDs = entry.pos_group ? state.cache.get(`${state.season || "latest"}:${entry.pos_group}`) : null;
+  const cachedMatch = filteredMatch || cachedDs?.players?.find((p) => p.uid === entry.uid);
+  if (!cachedMatch) return entry;
+  return {
+    ...entry,
+    club: clubNameOf(cachedMatch),
+    league: cachedMatch.league ?? entry.league,
+    age: cachedMatch.age ?? entry.age,
+    minutes: cachedMatch.minutes ?? entry.minutes,
+    avg_rating: cachedMatch.avg_rating ?? entry.avg_rating,
+    active_score: filteredMatch?.active_score ?? cachedMatch.score_overall ?? entry.active_score,
+    value: cachedMatch.value ?? entry.value,
+    value_state: cachedMatch.value_state ?? entry.value_state,
+    wage: cachedMatch.wage ?? entry.wage,
+    contract_end: cachedMatch.contract_end ?? entry.contract_end,
+  };
+}
+
 export function filteredShortlist() {
   const position = els.shortlistPosition.value;
-  const saved = Object.values(state.shortlist);
-  return position ? saved.filter((player) => parsePlayerPositions(player.positions).includes(position)) : saved;
+  const sortBy = els.shortlistSort?.value || "added";
+  const saved = Object.values(state.shortlist).map(enrichShortlistEntry);
+  const list = position ? saved.filter((player) => parsePlayerPositions(player.positions).includes(position)) : saved;
+  if (sortBy === "score") {
+    list.sort((a, b) => (Number(b.active_score) || -1) - (Number(a.active_score) || -1) || collator.compare(playerName(a), playerName(b)));
+  } else if (sortBy === "value") {
+    list.sort((a, b) => {
+      const av = Number.isFinite(Number(a.value)) && a.value != null ? Number(a.value) : Infinity;
+      const bv = Number.isFinite(Number(b.value)) && b.value != null ? Number(b.value) : Infinity;
+      return av - bv || collator.compare(playerName(a), playerName(b));
+    });
+  } else if (sortBy === "age") {
+    list.sort((a, b) => (Number(a.age) || 999) - (Number(b.age) || 999) || collator.compare(playerName(a), playerName(b)));
+  } else if (sortBy === "name") {
+    list.sort((a, b) => collator.compare(playerName(a), playerName(b)));
+  } else {
+    list.sort((a, b) => (Number(b.added_at) || 0) - (Number(a.added_at) || 0));
+  }
+  return list;
 }
 
 export function renderShortlist() {
@@ -232,22 +306,31 @@ export function renderShortlist() {
   const items = filteredShortlist();
   els.btnExportShortlist.disabled = !items.length;
   els.btnClearShortlist.disabled = !saved.length;
-  els.shortlistBody.innerHTML = items.length ? items.map((player) => `
+  els.shortlistBody.innerHTML = items.length ? items.map((player) => {
+    const scorePill =
+      player.active_score != null && Number.isFinite(Number(player.active_score))
+        ? `<span class="pct-pill ${pctClass(Math.round(Number(player.active_score)))}">${Number(player.active_score).toFixed(1)}</span>`
+        : "";
+    return `
     <div class="shortlist-item" data-uid="${escapeHtml(player.uid)}">
-      <div>
-        <button type="button" class="player-link" data-action="profile">${escapeHtml(playerName(player))}</button>
-        · ${escapeHtml(clubNameOf(player))} · Age ${escapeHtml(player.age ?? "?")}
-        · ${escapeHtml(parsePlayerPositions(player.positions).join(", ") || "—")}
-        <div class="subtitle">Mins ${escapeHtml(player.minutes ?? "—")} · Value ${formatMoney(player.value)} · Wage ${
+      <div class="shortlist-item-main">
+        <div class="shortlist-item-title">
+          <button type="button" class="player-link" data-action="profile">${escapeHtml(playerName(player))}</button>
+          ${scorePill}
+          <span>· ${escapeHtml(clubNameOf(player))} · Age ${escapeHtml(player.age ?? "?")} · ${escapeHtml(parsePlayerPositions(player.positions).join(", ") || "—")}</span>
+        </div>
+        <div class="subtitle">Mins ${escapeHtml(player.minutes ?? "—")} · Value ${escapeHtml(formatPlayerValue(player))} · Wage ${
           player.wage == null ? "—" : `${formatMoney(player.wage)}/wk`
         } · Contract ${escapeHtml(player.contract_end || "—")}</div>
+        <input type="text" class="shortlist-note-input" data-action="note" placeholder="Add scout note..." aria-label="Scout note for ${escapeHtml(playerName(player))}" value="${escapeHtml(player.note || "")}">
       </div>
       <div class="dialog-head-actions">
         <button type="button" class="btn secondary" data-action="copy-name" ${player.name ? "" : "disabled"}>Copy Name</button>
         <button type="button" class="btn secondary remove-shortlist-btn" data-action="remove">Remove</button>
       </div>
     </div>
-  `).join("") : '<p class="subtitle">No players shortlisted yet. Select the star next to a player to add them.</p>';
+  `;
+  }).join("") : '<p class="subtitle">No players shortlisted yet. Select the star next to a player to add them.</p>';
 }
 
 export async function openShortlistedPlayer(saved, button, loadPositionFn) {

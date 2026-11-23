@@ -8,7 +8,7 @@ import {
   collator,
 } from "./constants.js";
 import { activeDataset, els, FACETS, saveLastView, saveSavedViews, seasonEndYear, state } from "./state.js";
-import { datasetHasClubReputation } from "./scoring.js";
+import { buildScoreConfigFromRole, datasetHasClubReputation, getMetricCatalog, refreshRoleSelectOptions } from "./scoring.js";
 import {
   clubImgUrl,
   clubKeyOf,
@@ -367,6 +367,21 @@ export function updateFilterMetaAndWarnings(chipCount = 0) {
       ? `${chipCount} custom filter${chipCount > 1 ? "s" : ""} active`
       : caps.length ? `Defaults: ${caps.join(" · ")}` : "All players";
   }
+  if (els.btnClearDefaults) {
+    const hasRestrictedDefaults =
+      els.maxAge.value === DEFAULT_FILTERS.maxAge ||
+      els.maxVal.value === DEFAULT_FILTERS.maxVal ||
+      els.minRep.value === DEFAULT_FILTERS.minRep;
+    els.btnClearDefaults.hidden = !hasRestrictedDefaults;
+  }
+}
+
+export function clearDefaultCaps(onRefresh) {
+  els.maxAge.value = "99";
+  els.maxVal.value = "999999999";
+  els.minRep.value = "0";
+  onRefresh();
+  showToast("Default age, value, and reputation caps cleared");
 }
 
 export function captureViewSnapshot() {
@@ -380,12 +395,31 @@ export function captureViewSnapshot() {
     if (!el) continue;
     scalars[key] = typeof DEFAULT_FILTERS[key] === "boolean" ? el.checked : el.value;
   }
+  const roleVal = els.role.value || "overall";
+  const customScore =
+    roleVal === "__custom_draft__" && state.scoreConfig
+      ? {
+          method: state.scoreConfig.method || "percentile",
+          metrics: state.scoreConfig.metrics
+            .filter((m) => m.enabled)
+            .map((m) => ({ key: m.key, weight: m.weight, higher_is_better: m.higher_is_better })),
+        }
+      : null;
+  const sorters = state.tabulatorTable
+    ? state.tabulatorTable
+        .getSorters()
+        .filter((s) => s.field)
+        .map((s) => ({ column: s.field, dir: s.dir }))
+    : [];
   return {
     pos: state.pos,
     search: els.search.value,
     facets,
     scalars,
-    role: els.role.value && els.role.value !== "__custom_draft__" ? els.role.value : "overall",
+    role: roleVal,
+    scoreMethod: state.scoreConfig?.method || "percentile",
+    customScore,
+    sort: sorters,
     scatterX: els.scatterX.value,
     scatterY: els.scatterY.value,
   };
@@ -438,9 +472,39 @@ export async function applyViewSnapshot(snap, selectPositionFn, refreshFn) {
   if (targetPos !== state.pos && selectPositionFn) {
     await selectPositionFn(targetPos);
   }
-  if (snap.role && [...els.role.options].some((o) => o.value === snap.role)) {
-    els.role.value = snap.role;
-    els.role.dispatchEvent(new Event("change"));
+  const dataset = activeDataset();
+  if (dataset && snap.role === "__custom_draft__" && snap.customScore?.metrics?.length) {
+    const catalog = getMetricCatalog(dataset);
+    const savedMap = new Map(snap.customScore.metrics.map((m) => [m.key, m]));
+    state.scoreConfig = {
+      pos: dataset.position,
+      roleSlug: "__custom_draft__",
+      presetId: null,
+      method: snap.customScore.method || snap.scoreMethod || "percentile",
+      metrics: catalog.list.map((cat) => {
+        const saved = savedMap.get(cat.key);
+        return {
+          key: cat.key,
+          weight: saved ? Math.max(0, Math.min(5, Number(saved.weight) || 0)) : 1,
+          higher_is_better: saved ? Boolean(saved.higher_is_better) : cat.higher_is_better,
+          enabled: Boolean(saved),
+        };
+      }),
+    };
+    state.customDrafts[dataset.position] = state.scoreConfig;
+    refreshRoleSelectOptions(dataset, "__custom_draft__");
+  } else if (snap.role && [...els.role.options].some((o) => o.value === snap.role)) {
+    if (dataset) {
+      delete state.customDrafts[dataset.position];
+      state.scoreConfig = buildScoreConfigFromRole(
+        dataset,
+        snap.role,
+        snap.role.startsWith("custom:") ? null : snap.scoreMethod || "percentile"
+      );
+      refreshRoleSelectOptions(dataset, state.scoreConfig.roleSlug);
+    } else {
+      els.role.value = snap.role;
+    }
   }
   if (snap.scatterX && [...els.scatterX.options].some((o) => o.value === snap.scatterX)) {
     els.scatterX.value = snap.scatterX;
@@ -448,7 +512,14 @@ export async function applyViewSnapshot(snap, selectPositionFn, refreshFn) {
   if (snap.scatterY && [...els.scatterY.options].some((o) => o.value === snap.scatterY)) {
     els.scatterY.value = snap.scatterY;
   }
-  refreshFn();
+  await refreshFn();
+  if (Array.isArray(snap.sort) && snap.sort.length && state.tabulatorTable) {
+    try {
+      state.tabulatorTable.setSort(snap.sort);
+    } catch {
+      // Ignore unknown columns on sort restore
+    }
+  }
 }
 
 export function renderActiveFilterChips(dataset, onRefresh) {
@@ -562,7 +633,9 @@ export function saveCurrentView(showToastFn = showToast) {
   const roleLabel = els.role?.selectedOptions?.[0]?.textContent?.trim() || "Overall";
   const snap = captureViewSnapshot();
   const scope = snap.facets.leagues?.length === 1 ? snap.facets.leagues[0] : state.pos;
-  const name = `${scope} · ${roleLabel} (#${views.length + 1})`;
+  const customName = els.viewNameInput?.value.trim() || "";
+  const name = customName || `${scope} · ${roleLabel} (#${views.length + 1})`;
+  if (els.viewNameInput && customName) els.viewNameInput.value = "";
   const id = `v_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
   const entry = { id, name, ...snap };
   state.savedViews = [...views, entry];

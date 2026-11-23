@@ -5,8 +5,10 @@ import { getMetricCatalog } from "./scoring.js";
 import {
   clubImgUrl,
   clubNameOf,
+  copyPlayerName,
   escapeHtml,
   formatMoney,
+  formatPlayerValue,
   formatStat,
   pctClass,
   personImgUrl,
@@ -53,6 +55,9 @@ export function buildTabulatorColumns(dataset) {
             <img class="tab-avatar" src="${personImgUrl(p)}" alt="" width="26" height="26" loading="lazy" decoding="async">
             <button type="button" class="player-link">${escapeHtml(playerName(p))}</button>
             ${badge}
+            <button type="button" class="row-copy-btn" title="Copy player name" aria-label="Copy player name" ${
+              p.name ? "" : "disabled"
+            }>⧉</button>
           </div>
         `;
       },
@@ -63,6 +68,12 @@ export function buildTabulatorColumns(dataset) {
           const row = cell.getRow();
           toggleRowShortlist(row.getData());
           row.reformat();
+          return;
+        }
+        const copyBtn = e.target.closest(".row-copy-btn");
+        if (copyBtn) {
+          e.stopPropagation();
+          copyPlayerName(cell.getRow().getData());
         }
       },
     },
@@ -145,10 +156,10 @@ export function buildTabulatorColumns(dataset) {
     {
       title: "Value",
       field: "value",
-      width: 92,
+      width: 96,
       sorter: "number",
       visible: isVisible("value", true),
-      formatter: (cell) => formatMoney(cell.getValue()),
+      formatter: (cell) => formatPlayerValue(cell.getRow().getData()),
     },
     {
       title: "Wage/wk",
@@ -277,7 +288,7 @@ export async function initOrUpdateTable(dataset, rows, onRowClick) {
         });
 
     table.on("rowClick", (e, row) => {
-      if (e.target.closest(".row-star-btn")) return;
+      if (e.target.closest(".row-star-btn, .row-copy-btn")) return;
       const ds = activeDataset();
       if (ds && onRowClick) onRowClick(row.getData(), ds);
     });

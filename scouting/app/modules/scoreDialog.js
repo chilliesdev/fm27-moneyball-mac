@@ -144,13 +144,13 @@ export function renderScorePreview(dataset) {
   els.scorePreviewList.innerHTML = sorted
     .map(
       (p, idx) => `
-      <div class="score-preview-item">
+      <button type="button" class="score-preview-item" data-uid="${escapeHtml(p.uid)}" title="Inspect ${escapeHtml(playerName(p))}">
         <div class="score-preview-meta">
           <div class="score-preview-name">#${idx + 1} ${escapeHtml(playerName(p))}</div>
           <div class="score-preview-sub">${escapeHtml(clubNameOf(p))} · Age ${p.age ?? "?"} · ${p.minutes}m</div>
         </div>
         <span class="pct-pill pct-elite">${Number(p.active_score ?? 0).toFixed(1)}</span>
-      </div>
+      </button>
     `
     )
     .join("");
@@ -195,7 +195,7 @@ function flushScoreDialogChanges(onRefresh) {
   }
 }
 
-export function wireScoreDialogEvents(onRefresh) {
+export function wireScoreDialogEvents(onRefresh, onOpenPlayer = null) {
   enableLightDismissFallback(els.scoreDialog);
 
   els.btnCustomizeScore.addEventListener("click", () => {
@@ -256,6 +256,17 @@ export function wireScoreDialogEvents(onRefresh) {
       item.enabled = catalog.defaultKeys.has(item.key);
       item.weight = 1;
       if (cat) item.higher_is_better = cat.higher_is_better;
+    }
+    markScoreCustomDraft();
+    renderScoreDialog();
+    state.scoreDialogDirty = true;
+  });
+
+  els.scoreEqualizeBtn?.addEventListener("click", () => {
+    const dataset = activeDataset();
+    if (!dataset || !state.scoreConfig) return;
+    for (const item of state.scoreConfig.metrics) {
+      if (item.enabled) item.weight = 1;
     }
     markScoreCustomDraft();
     renderScoreDialog();
@@ -427,14 +438,24 @@ export function wireScoreDialogEvents(onRefresh) {
     showToast(`Renamed preset to "${newName}"`);
   });
 
+  els.scorePreviewList?.addEventListener("click", (ev) => {
+    const item = ev.target.closest(".score-preview-item[data-uid]");
+    const dataset = activeDataset();
+    if (!item || !dataset || !onOpenPlayer) return;
+    const player = dataset.players.find((p) => p.uid === item.dataset.uid);
+    if (player) onOpenPlayer(player, dataset);
+  });
+
   els.scoreDeletePresetBtn.addEventListener("click", () => {
     const dataset = activeDataset();
     if (!dataset) return;
+    const pos = dataset.position;
     const id = els.scorePresetSelect.value;
     if (!id) return;
-    const list = getPosPresets(dataset.position);
-    const target = list.find((p) => p.id === id);
-    state.presets[dataset.position] = list.filter((p) => p.id !== id);
+    const list = getPosPresets(pos);
+    const targetIdx = list.findIndex((p) => p.id === id);
+    const target = targetIdx >= 0 ? list[targetIdx] : null;
+    state.presets[pos] = list.filter((p) => p.id !== id);
     savePresets();
     els.scorePresetName.value = "";
     state.scoreConfig = buildScoreConfigFromRole(dataset, "overall", state.scoreConfig?.method);
@@ -442,6 +463,26 @@ export function wireScoreDialogEvents(onRefresh) {
     renderScoreDialog();
     state.scoreDialogDirty = true;
     flushScoreDialogChanges(onRefresh);
-    if (target) showToast(`Deleted preset "${target.name}"`);
+    if (target) {
+      showToast(`Deleted preset "${target.name}"`, {
+        actionLabel: "Undo",
+        onAction: () => {
+          const cur = getPosPresets(pos);
+          if (!cur.some((p) => p.id === target.id)) {
+            const restored = [...cur];
+            restored.splice(Math.min(targetIdx, restored.length), 0, target);
+            state.presets[pos] = restored;
+            savePresets();
+          }
+          const ds = activeDataset();
+          if (ds && ds.position === pos) {
+            state.scoreConfig = buildScoreConfigFromRole(ds, `custom:${target.id}`);
+            refreshRoleSelectOptions(ds, `custom:${target.id}`);
+            if (els.scoreDialog.open) renderScoreDialog();
+            onRefresh();
+          }
+        },
+      });
+    }
   });
 }

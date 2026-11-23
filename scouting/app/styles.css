@@ -339,11 +339,24 @@ input:focus-visible {
   transition: transform 0.15s ease;
 }
 
-#btn-toggle-filters[aria-expanded="false"] .filters-toggle-caret {
+#btn-toggle-filters[aria-expanded="false"] .filters-toggle-caret,
+#btn-toggle-scatter[aria-expanded="false"] .filters-toggle-caret {
   transform: rotate(-90deg);
 }
 
-.filter-grid[hidden] {
+.view-name-input {
+  inline-size: 145px;
+  padding: 0.34rem 0.55rem;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.8rem;
+}
+
+.filter-grid[hidden],
+#scatter-body[hidden] {
   display: none;
 }
 
@@ -808,6 +821,17 @@ input:focus-visible {
   margin-block-end: 0.65rem;
 }
 
+.scatter-header.is-collapsed {
+  margin-block-end: 0;
+}
+
+.scatter-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.65rem;
+}
+
 .scatter-note {
   margin: 0.15rem 0 0;
   font-size: 0.82rem;
@@ -992,6 +1016,31 @@ input:focus-visible {
 
 .row-star-btn.is-saved {
   color: var(--accent);
+}
+
+.row-copy-btn {
+  margin-inline-start: auto;
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+  line-height: 1;
+  padding: 0.15rem 0.25rem;
+  cursor: pointer;
+  flex: none;
+  border-radius: 4px;
+  opacity: 0.65;
+}
+
+.row-copy-btn:hover {
+  color: var(--accent);
+  opacity: 1;
+}
+
+.row-copy-btn:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .player-link {
@@ -1230,7 +1279,15 @@ dialog::backdrop {
 .dialog-head-actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 0.5rem;
+}
+
+.dialog-row-pos {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .dialog-body {
@@ -1548,11 +1605,25 @@ dialog::backdrop {
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
+  inline-size: 100%;
   padding: 0.45rem 0.55rem;
   border-radius: 8px;
   background: var(--surface);
   border: 1px solid var(--border);
+  color: var(--text);
+  font: inherit;
   font-size: 0.8rem;
+  text-align: start;
+  cursor: pointer;
+}
+
+.score-preview-item:hover {
+  border-color: var(--accent);
+}
+
+.score-preview-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .score-preview-meta {
@@ -1583,7 +1654,15 @@ dialog::backdrop {
   gap: 0.75rem;
 }
 
+.shortlist-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: end;
+}
+
 .shortlist-filter {
+  min-inline-size: 11rem;
   max-inline-size: 14rem;
 }
 
@@ -1601,6 +1680,33 @@ dialog::backdrop {
   padding: 0.6rem 0.8rem;
   background: var(--surface-2);
   border-radius: 8px;
+}
+
+.shortlist-item-main {
+  flex: 1;
+  min-inline-size: 220px;
+  display: grid;
+  gap: 0.25rem;
+}
+
+.shortlist-item-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.shortlist-note-input {
+  inline-size: 100%;
+  max-inline-size: 360px;
+  margin-block-start: 0.15rem;
+  padding: 0.28rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.78rem;
 }
 
 /* Toast Notifications */
@@ -1624,6 +1730,10 @@ dialog::backdrop {
 
 .toast-item {
   pointer-events: auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
   padding: 0.55rem 0.85rem;
   border-radius: 8px;
   border: 1px solid var(--border);
@@ -1633,4 +1743,9 @@ dialog::backdrop {
   font-weight: 600;
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.25);
   border-inline-start: 4px solid var(--accent);
+}
+
+.toast-action-btn {
+  flex: none;
+  font-size: 0.82rem;
 }

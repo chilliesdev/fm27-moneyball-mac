@@ -2,6 +2,7 @@ import {
   CLUB_PAGE_SIZE,
   MIN_FILTERS,
   POS_LABELS,
+  SCATTER_PRESETS,
   SQUAD_PAGE_SIZE,
   collator,
 } from "./modules/constants.js";
@@ -35,6 +36,7 @@ import {
 } from "./modules/scoring.js";
 import {
   applyViewSnapshot,
+  clearDefaultCaps,
   describeActiveDefaultCaps,
   getClubCatalog,
   getFilterRangeConflicts,
@@ -56,6 +58,7 @@ import {
   populateScatterAxes,
   renderPlayerProgression,
   renderScatter,
+  syncScatterPresetSelect,
 } from "./modules/charts.js";
 import {
   filteredShortlist,
@@ -164,6 +167,9 @@ async function loadMeta(season = state.season) {
   els.clubTitle.textContent = `${clubName} — Moneyball Scout`;
   const seasonLabel = state.meta.season ? `Season ${state.meta.season} · ` : "";
   els.saveMeta.textContent = `FM27 · ${seasonLabel}${state.meta.in_game_date || ""} · ${state.meta.save_file || ""} · Stats-Only`;
+  if (state.meta.save_path && els.saveSelect && [...els.saveSelect.options].some((o) => o.value === state.meta.save_path)) {
+    els.saveSelect.value = state.meta.save_path;
+  }
   populateContractOptions();
 }
 
@@ -474,10 +480,23 @@ function wireEvents() {
 
   [els.scatterX, els.scatterY].forEach((el) => {
     el.addEventListener("change", () => {
+      syncScatterPresetSelect(state.pos);
       const dataset = activeDataset();
       if (dataset) renderScatter(dataset, openDialog);
       persistLastViewSnapshot();
     });
+  });
+
+  els.scatterPreset?.addEventListener("change", () => {
+    const idx = els.scatterPreset.value;
+    if (idx === "") return;
+    const preset = (SCATTER_PRESETS[state.pos] || [])[Number(idx)];
+    if (!preset) return;
+    if ([...els.scatterX.options].some((o) => o.value === preset.x)) els.scatterX.value = preset.x;
+    if ([...els.scatterY.options].some((o) => o.value === preset.y)) els.scatterY.value = preset.y;
+    const dataset = activeDataset();
+    if (dataset) renderScatter(dataset, openDialog);
+    persistLastViewSnapshot();
   });
 
   els.btnSwapAxes?.addEventListener("click", () => {
@@ -485,6 +504,7 @@ function wireEvents() {
     const prevY = els.scatterY.value;
     els.scatterX.value = prevY;
     els.scatterY.value = prevX;
+    syncScatterPresetSelect(state.pos);
     const dataset = activeDataset();
     if (dataset) renderScatter(dataset, openDialog);
     persistLastViewSnapshot();
@@ -495,6 +515,16 @@ function wireEvents() {
     els.filterGrid.hidden = collapsed;
     els.btnToggleFilters.setAttribute("aria-expanded", String(!collapsed));
     els.btnToggleFilters.closest(".filters-header")?.classList.toggle("is-collapsed", collapsed);
+  });
+
+  els.btnClearDefaults?.addEventListener("click", () => clearDefaultCaps(refreshView));
+
+  els.btnToggleScatter?.addEventListener("click", () => {
+    const collapsed = !els.scatterBody.hidden;
+    els.scatterBody.hidden = collapsed;
+    els.btnToggleScatter.setAttribute("aria-expanded", String(!collapsed));
+    els.btnToggleScatter.closest(".scatter-header")?.classList.toggle("is-collapsed", collapsed);
+    if (!collapsed) requestAnimationFrame(() => state.scatterChart?.resize());
   });
 
   els.btnSaveView?.addEventListener("click", () => saveCurrentView(showToast));
@@ -513,11 +543,27 @@ function wireEvents() {
   els.btnDeleteView?.addEventListener("click", () => {
     const id = els.savedViewSelect?.value;
     if (!id) return;
-    const target = (state.savedViews || []).find((v) => v.id === id);
-    state.savedViews = (state.savedViews || []).filter((v) => v.id !== id);
+    const views = state.savedViews || [];
+    const targetIdx = views.findIndex((v) => v.id === id);
+    const target = targetIdx >= 0 ? views[targetIdx] : null;
+    state.savedViews = views.filter((v) => v.id !== id);
     saveSavedViews();
     renderSavedViewsSelect();
-    if (target) showToast(`Deleted view "${target.name}"`);
+    if (target) {
+      showToast(`Deleted view "${target.name}"`, {
+        actionLabel: "Undo",
+        onAction: () => {
+          const cur = state.savedViews || [];
+          if (!cur.some((v) => v.id === target.id)) {
+            const restored = [...cur];
+            restored.splice(Math.min(targetIdx, restored.length), 0, target);
+            state.savedViews = restored;
+            saveSavedViews();
+          }
+          renderSavedViewsSelect(target.id);
+        },
+      });
+    }
   });
 
   els.btnRestoreView?.addEventListener("click", async () => {
@@ -564,13 +610,23 @@ function wireEvents() {
   });
 
   wirePopoverBehaviors({ onRefresh: refreshView, onOpenColumnChooser: renderColumnChooser });
-  wireScoreDialogEvents(refreshView);
+  wireScoreDialogEvents(refreshView, openDialog);
 
   document.addEventListener("keydown", (ev) => {
-    if (ev.key !== "/" || ev.metaKey || ev.ctrlKey || ev.altKey) return;
-    if (document.querySelector("dialog[open]")) return;
+    if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
     const target = ev.target;
-    if (target && target.closest("input, textarea, select, [contenteditable='true']")) return;
+    const inEditable = target && target.closest("input, textarea, select, [contenteditable='true']");
+    if (els.playerDialog.open) {
+      if (!inEditable && ev.key === "ArrowLeft") {
+        ev.preventDefault();
+        stepPlayerDialog(-1, loadPosition);
+      } else if (!inEditable && ev.key === "ArrowRight") {
+        ev.preventDefault();
+        stepPlayerDialog(1, loadPosition);
+      }
+      return;
+    }
+    if (ev.key !== "/" || document.querySelector("dialog[open]") || inEditable) return;
     ev.preventDefault();
     els.search.focus();
     els.search.select();
@@ -578,6 +634,27 @@ function wireEvents() {
 
   enableLightDismissFallback(els.playerDialog);
   enableLightDismissFallback(els.shortlistDialog);
+  [els.playerDialog, els.shortlistDialog, els.scoreDialog].forEach((dlg) => {
+    dlg?.addEventListener("close", () => {
+      if (els.toastRegion && dlg.contains(els.toastRegion)) {
+        const wasOpen = (() => {
+          try {
+            return els.toastRegion.matches(":popover-open");
+          } catch {
+            return false;
+          }
+        })();
+        document.body.append(els.toastRegion);
+        if (wasOpen && typeof els.toastRegion.showPopover === "function") {
+          try {
+            els.toastRegion.showPopover();
+          } catch {
+            // Ignore popover support differences
+          }
+        }
+      }
+    });
+  });
   els.dialogCloseBtn.addEventListener("click", () => els.playerDialog.close());
   els.shortlistCloseBtn.addEventListener("click", () => els.shortlistDialog.close());
 
@@ -597,6 +674,22 @@ function wireEvents() {
   els.dialogCopyName.addEventListener("click", () => {
     const player = state.activeProfile?.player;
     if (player?.name) copyPlayerName(player);
+  });
+  els.dialogPinCompare?.addEventListener("click", () => {
+    const profile = state.activeProfile;
+    if (!profile?.dataset) return;
+    const { player, dataset } = profile;
+    if (state.pinnedCompare?.uid === player.uid) {
+      state.pinnedCompare = null;
+      els.dialogPinCompare.textContent = "Pin Compare";
+      els.dialogPinCompare.setAttribute("aria-pressed", "false");
+      showToast("Unpinned comparison player");
+    } else {
+      state.pinnedCompare = { uid: player.uid, position: dataset.position, player };
+      els.dialogPinCompare.textContent = "Unpin Compare";
+      els.dialogPinCompare.setAttribute("aria-pressed", "true");
+      showToast(`Pinned ${playerName(player)} for radar comparison`);
+    }
   });
   els.dialogPrevPlayer?.addEventListener("click", () => stepPlayerDialog(-1, loadPosition));
   els.dialogNextPlayer?.addEventListener("click", () => stepPlayerDialog(1, loadPosition));
@@ -630,6 +723,15 @@ function wireEvents() {
     els.shortlistDialog.showModal();
   });
   els.shortlistPosition.addEventListener("change", renderShortlist);
+  els.shortlistSort?.addEventListener("change", renderShortlist);
+  els.shortlistBody.addEventListener("input", (event) => {
+    const noteInput = event.target.closest(".shortlist-note-input");
+    if (!noteInput) return;
+    const uid = noteInput.closest("[data-uid]")?.dataset.uid;
+    if (!uid || !state.shortlist[uid]) return;
+    state.shortlist[uid].note = noteInput.value;
+    saveShortlist();
+  });
   els.shortlistBody.addEventListener("click", (event) => {
     const button = event.target.closest("button[data-action]");
     if (!button) return;
@@ -646,12 +748,24 @@ function wireEvents() {
     }
   });
   els.btnClearShortlist.addEventListener("click", () => {
+    const prev = { ...state.shortlist };
+    const count = Object.keys(prev).length;
+    if (!count) return;
     state.shortlist = {};
     saveShortlist();
     window.dispatchEvent(new Event("moneyball:shortlist-changed"));
     renderShortlist();
     state.tabulatorTable?.getRows().forEach((r) => r.reformat());
-    showToast("Shortlist cleared");
+    showToast(`Cleared ${count} shortlisted player${count > 1 ? "s" : ""}`, {
+      actionLabel: "Undo",
+      onAction: () => {
+        state.shortlist = { ...prev, ...state.shortlist };
+        saveShortlist();
+        window.dispatchEvent(new Event("moneyball:shortlist-changed"));
+        if (els.shortlistDialog.open) renderShortlist();
+        state.tabulatorTable?.getRows().forEach((r) => r.reformat());
+      },
+    });
   });
 
   let shortlistScatterRaf = null;
@@ -679,7 +793,7 @@ function wireEvents() {
   els.btnExportShortlist.addEventListener("click", () => {
     const items = filteredShortlist();
     if (!items.length) return;
-    const cols = ["name", "club", "league", "nation", "foot", "age", "positions", "pos_group", "minutes", "avg_rating", "active_score", "value", "wage", "contract_end"];
+    const cols = ["name", "club", "league", "nation", "foot", "age", "positions", "pos_group", "minutes", "avg_rating", "active_score", "value", "wage", "contract_end", "note"];
     const lines = [
       cols.join(","),
       ...items.map((r) => cols.map((c) => `"${String(r[c] ?? "").replaceAll('"', '""')}"`).join(",")),
@@ -710,7 +824,20 @@ function wireEvents() {
   });
 }
 
+function updateStaleSaveIndicator(isStale) {
+  if (!els.btnRefreshSave) return;
+  const stale = Boolean(isStale);
+  els.btnRefreshSave.classList.toggle("is-pending", stale);
+  els.btnRefreshSave.title = stale
+    ? "Newer FM27 save detected on disk — click to refresh"
+    : "Rebuild scouting data from selected FM27 save";
+  if (!els.btnRefreshSave.disabled) {
+    els.btnRefreshSave.textContent = stale ? "Refresh Save •" : "Refresh Save";
+  }
+}
+
 function renderServerControls(status) {
+  updateStaleSaveIndicator(status.newest_save_stale);
   state.seasons = status.seasons || [];
   if (state.seasons.length) {
     els.seasonSelect.innerHTML = state.seasons
@@ -731,8 +858,11 @@ function renderServerControls(status) {
     els.saveSelect.innerHTML = saves
       .map((s) => `<option value="${escapeHtml(s.path)}">${escapeHtml(s.name)} (${escapeHtml(s.modified)})</option>`)
       .join("");
-    if (prevSave && saves.some((s) => s.path === prevSave)) {
-      els.saveSelect.value = prevSave;
+    const preferred = state.meta?.save_path && saves.some((s) => s.path === state.meta.save_path)
+      ? state.meta.save_path
+      : prevSave;
+    if (preferred && saves.some((s) => s.path === preferred)) {
+      els.saveSelect.value = preferred;
     }
   } else {
     els.saveSelect.innerHTML = `<option value="">No .fm saves found</option>`;
@@ -784,11 +914,36 @@ async function refreshFromSave(savePath = null) {
     return true;
   } catch (err) {
     els.poolSummary.textContent = `Save refresh failed: ${err.message}`;
+    showToast(`Save refresh failed: ${err.message}`);
     return false;
   } finally {
     els.btnRefreshSave.disabled = false;
-    els.btnRefreshSave.textContent = origText;
+    els.btnRefreshSave.textContent = els.btnRefreshSave.classList.contains("is-pending")
+      ? "Refresh Save •"
+      : "Refresh Save";
   }
+}
+
+let lastStatusPoll = 0;
+function wireStaleSaveCheck() {
+  const checkStatus = async () => {
+    if (document.hidden || els.btnRefreshSave?.disabled) return;
+    const now = Date.now();
+    if (now - lastStatusPoll < 10_000) return;
+    lastStatusPoll = now;
+    try {
+      const res = await fetch("/api/status");
+      if (!res.ok) return;
+      const status = await res.json();
+      updateStaleSaveIndicator(status.newest_save_stale);
+    } catch {
+      // Static fallback
+    }
+  };
+  window.addEventListener("focus", checkStatus);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) checkStatus();
+  });
 }
 
 async function init() {
@@ -807,6 +962,7 @@ async function init() {
   if (serverStatus) {
     renderServerControls(serverStatus);
   }
+  wireStaleSaveCheck();
 
   const params = new URLSearchParams(window.location.search);
   const shouldAutoRefresh = params.get("auto_refresh") === "1" && serverStatus?.newest_save_stale;

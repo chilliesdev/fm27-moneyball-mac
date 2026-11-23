@@ -50,6 +50,12 @@ export function formatMoney(val) {
   return `£${Math.round(num)}`;
 }
 
+export function formatPlayerValue(player) {
+  const formatted = formatMoney(player?.value);
+  if (formatted !== "—") return formatted;
+  return player?.value_state === "placeholder" ? "Undisclosed" : "—";
+}
+
 export function formatStat(key, val) {
   if (val === null || val === undefined || val === "") return "—";
   const num = Number(val);
@@ -70,32 +76,60 @@ export function pctClass(pct) {
   return "pct-low";
 }
 
-export function showToast(message) {
+export function showToast(message, options = null) {
   if (!els.toastRegion || !message) return;
+  const openDialogs = [...document.querySelectorAll("dialog[open]")];
+  const host = openDialogs.length ? openDialogs[openDialogs.length - 1] : document.body;
+  if (els.toastRegion.parentElement !== host) {
+    try {
+      if (els.toastRegion.matches(":popover-open")) els.toastRegion.hidePopover();
+    } catch {
+      // Ignore popover support differences
+    }
+    host.append(els.toastRegion);
+  }
   while (els.toastRegion.children.length >= 3) {
     els.toastRegion.firstElementChild.remove();
   }
   const item = document.createElement("div");
   item.className = "toast-item";
-  item.textContent = message;
+  const textSpan = document.createElement("span");
+  textSpan.className = "toast-message";
+  textSpan.textContent = message;
+  item.append(textSpan);
 
-  let remaining = 3000;
+  let remaining = options?.duration ?? (options?.onAction ? 5000 : 3000);
   let startedAt = Date.now();
   let timer = null;
+
+  const dismiss = () => {
+    clearTimeout(timer);
+    item.remove();
+    if (!els.toastRegion.children.length) {
+      try {
+        if (els.toastRegion.matches(":popover-open")) els.toastRegion.hidePopover();
+      } catch {
+        // Ignore popover support differences
+      }
+    }
+  };
+
+  if (options?.actionLabel && typeof options?.onAction === "function") {
+    const actionBtn = document.createElement("button");
+    actionBtn.type = "button";
+    actionBtn.className = "btn-link toast-action-btn";
+    actionBtn.textContent = options.actionLabel;
+    actionBtn.addEventListener("click", () => {
+      dismiss();
+      options.onAction();
+    });
+    item.append(actionBtn);
+  }
 
   const schedule = () => {
     startedAt = Date.now();
     clearTimeout(timer);
-    timer = setTimeout(() => {
-      item.remove();
-      if (!els.toastRegion.children.length) {
-        try {
-          if (els.toastRegion.matches(":popover-open")) els.toastRegion.hidePopover();
-        } catch {
-          // Ignore popover support differences
-        }
-      }
-    }, remaining);
+    timer = setTimeout(dismiss, remaining);
   };
   const pause = () => {
     clearTimeout(timer);

@@ -61,6 +61,7 @@
             <span>Filters</span>
           </button>
           <span id="filter-toggle-meta" class="subtitle"></span>
+          <button type="button" id="btn-clear-defaults" class="btn-link" hidden>Clear Defaults</button>
         </div>
         <div class="filters-header-actions">
           <button type="button" id="btn-restore-view" class="btn secondary btn-compact" hidden>Restore Last View</button>
@@ -70,6 +71,7 @@
               <option value="">— Saved Views —</option>
             </select>
           </label>
+          <input type="text" id="f-view-name" class="view-name-input" placeholder="View name (optional)" aria-label="Custom view name">
           <button type="button" id="btn-save-view" class="btn secondary btn-compact" title="Save current filters and axes as a view">Save View</button>
           <button type="button" id="btn-delete-view" class="btn secondary btn-compact" title="Delete selected view" disabled>Delete</button>
         </div>
@@ -83,8 +85,8 @@
         </div>
 
         <div class="field">
-          <span>Leagues</span>
-          <button type="button" class="multi-trigger" id="btn-f-leagues" popovertarget="pop-leagues" aria-haspopup="listbox" aria-expanded="false" aria-controls="list-leagues">
+          <span id="lbl-f-leagues">Leagues</span>
+          <button type="button" class="multi-trigger" id="btn-f-leagues" popovertarget="pop-leagues" aria-haspopup="listbox" aria-expanded="false" aria-controls="list-leagues" aria-labelledby="lbl-f-leagues btn-f-leagues">
             <span class="trigger-label">All Leagues</span>
             <span class="trigger-badge" hidden>0</span>
           </button>
@@ -101,8 +103,8 @@
         </div>
 
         <div class="field">
-          <span>Clubs</span>
-          <button type="button" class="multi-trigger" id="btn-f-clubs" popovertarget="pop-clubs" aria-haspopup="listbox" aria-expanded="false" aria-controls="list-clubs">
+          <span id="lbl-f-clubs">Clubs</span>
+          <button type="button" class="multi-trigger" id="btn-f-clubs" popovertarget="pop-clubs" aria-haspopup="listbox" aria-expanded="false" aria-controls="list-clubs" aria-labelledby="lbl-f-clubs btn-f-clubs">
             <span class="trigger-label">All Clubs</span>
             <span class="trigger-badge" hidden>0</span>
           </button>
@@ -123,8 +125,8 @@
         </div>
 
         <div class="field">
-          <span>Positions</span>
-          <button type="button" class="multi-trigger" id="btn-f-positions" popovertarget="pop-positions" aria-haspopup="listbox" aria-expanded="false" aria-controls="list-positions">
+          <span id="lbl-f-positions">Positions</span>
+          <button type="button" class="multi-trigger" id="btn-f-positions" popovertarget="pop-positions" aria-haspopup="listbox" aria-expanded="false" aria-controls="list-positions" aria-labelledby="lbl-f-positions btn-f-positions">
             <span class="trigger-label">All Positions</span>
             <span class="trigger-badge" hidden>0</span>
           </button>
@@ -138,8 +140,8 @@
         </div>
 
         <div class="field">
-          <span>Nationality</span>
-          <button type="button" class="multi-trigger" id="btn-f-nations" popovertarget="pop-nations" aria-haspopup="listbox" aria-expanded="false" aria-controls="list-nations">
+          <span id="lbl-f-nations">Nationality</span>
+          <button type="button" class="multi-trigger" id="btn-f-nations" popovertarget="pop-nations" aria-haspopup="listbox" aria-expanded="false" aria-controls="list-nations" aria-labelledby="lbl-f-nations btn-f-nations">
             <span class="trigger-label">All Nationalities</span>
             <span class="trigger-badge" hidden>0</span>
           </button>
@@ -156,8 +158,8 @@
         </div>
 
         <div class="field">
-          <span>Preferred Foot</span>
-          <button type="button" class="multi-trigger" id="btn-f-feet" popovertarget="pop-feet" aria-haspopup="listbox" aria-expanded="false" aria-controls="list-feet">
+          <span id="lbl-f-feet">Preferred Foot</span>
+          <button type="button" class="multi-trigger" id="btn-f-feet" popovertarget="pop-feet" aria-haspopup="listbox" aria-expanded="false" aria-controls="list-feet" aria-labelledby="lbl-f-feet btn-f-feet">
             <span class="trigger-label">Any Foot</span>
             <span class="trigger-badge" hidden>0</span>
           </button>
@@ -171,8 +173,8 @@
         </div>
 
         <div class="field">
-          <span>Status</span>
-          <button type="button" class="multi-trigger" id="btn-f-statuses" popovertarget="pop-statuses" aria-haspopup="listbox" aria-expanded="false" aria-controls="list-statuses">
+          <span id="lbl-f-statuses">Status</span>
+          <button type="button" class="multi-trigger" id="btn-f-statuses" popovertarget="pop-statuses" aria-haspopup="listbox" aria-expanded="false" aria-controls="list-statuses" aria-labelledby="lbl-f-statuses btn-f-statuses">
             <span class="trigger-label">Any Status</span>
             <span class="trigger-badge" hidden>0</span>
           </button>
@@ -208,8 +210,11 @@
             <option value="99">Any Age</option>
             <option value="21">U21 (&le; 21)</option>
             <option value="23">U23 (&le; 23)</option>
+            <option value="24">&le; 24</option>
             <option value="25" selected>&le; 25</option>
+            <option value="26">&le; 26</option>
             <option value="27">&le; 27</option>
+            <option value="28">&le; 28</option>
             <option value="30">&le; 30</option>
           </select>
         </label>
@@ -220,10 +225,15 @@
             <option value="" selected>Any Value</option>
             <option value="500000">&ge; 500k</option>
             <option value="1000000">&ge; 1M</option>
+            <option value="2000000">&ge; 2M</option>
+            <option value="3000000">&ge; 3M</option>
             <option value="5000000">&ge; 5M</option>
+            <option value="7500000">&ge; 7.5M</option>
             <option value="10000000">&ge; 10M</option>
             <option value="15000000">&ge; 15M</option>
+            <option value="20000000">&ge; 20M</option>
             <option value="25000000">&ge; 25M</option>
+            <option value="35000000">&ge; 35M</option>
             <option value="50000000">&ge; 50M</option>
           </select>
         </label>
@@ -233,11 +243,18 @@
           <select id="f-max-val">
             <option value="999999999">Any Value</option>
             <option value="1000000">&le; 1M</option>
+            <option value="2000000">&le; 2M</option>
+            <option value="3000000">&le; 3M</option>
             <option value="5000000">&le; 5M</option>
+            <option value="7500000">&le; 7.5M</option>
             <option value="10000000">&le; 10M</option>
             <option value="15000000" selected>&le; 15M</option>
+            <option value="20000000">&le; 20M</option>
             <option value="25000000">&le; 25M</option>
+            <option value="35000000">&le; 35M</option>
             <option value="50000000">&le; 50M</option>
+            <option value="75000000">&le; 75M</option>
+            <option value="100000000">&le; 100M</option>
           </select>
         </label>
 
@@ -249,6 +266,7 @@
             <option value="5000">&ge; 5k/wk</option>
             <option value="10000">&ge; 10k/wk</option>
             <option value="15000">&ge; 15k/wk</option>
+            <option value="20000">&ge; 20k/wk</option>
             <option value="30000">&ge; 30k/wk</option>
             <option value="50000">&ge; 50k/wk</option>
             <option value="80000">&ge; 80k/wk</option>
@@ -259,10 +277,16 @@
           <span>Max Weekly Wage (£)</span>
           <select id="f-max-wage">
             <option value="999999999" selected>Any Wage</option>
+            <option value="5000">&le; 5k/wk</option>
+            <option value="10000">&le; 10k/wk</option>
             <option value="15000">&le; 15k/wk</option>
+            <option value="20000">&le; 20k/wk</option>
             <option value="30000">&le; 30k/wk</option>
+            <option value="40000">&le; 40k/wk</option>
             <option value="50000">&le; 50k/wk</option>
+            <option value="65000">&le; 65k/wk</option>
             <option value="80000">&le; 80k/wk</option>
+            <option value="100000">&le; 100k/wk</option>
           </select>
         </label>
 
@@ -318,11 +342,21 @@
 
     <section class="scatter-card" aria-label="Per 90 scatter comparison">
       <div class="scatter-header">
-        <div>
-          <h2>Per-90 Scatter Plot</h2>
-          <p class="scatter-note" id="pool-summary">Loading dataset...</p>
+        <div class="scatter-title-row">
+          <button type="button" id="btn-toggle-scatter" class="btn secondary btn-compact" aria-expanded="true" aria-controls="scatter-body">
+            <span class="filters-toggle-caret" aria-hidden="true">▾</span>
+            <span>Scatter Plot</span>
+          </button>
+          <div>
+            <h2>Per-90 Scatter Plot</h2>
+            <p class="scatter-note" id="pool-summary">Loading dataset...</p>
+          </div>
         </div>
         <div class="scatter-controls">
+          <label>
+            <span>Preset</span>
+            <select id="scatter-preset" aria-label="Scatter axis presets"></select>
+          </label>
           <label>
             <span>X Axis</span>
             <select id="scatter-x"></select>
@@ -335,7 +369,7 @@
           <button type="button" id="btn-export-scatter" class="btn secondary btn-compact">Export PNG</button>
         </div>
       </div>
-      <div class="scatter-wrap">
+      <div id="scatter-body" class="scatter-wrap">
         <div id="scatter-chart" class="scatter-chart" role="img" aria-label="Per-90 player scatter chart"></div>
       </div>
     </section>
@@ -376,9 +410,11 @@
           </div>
         </div>
         <div class="dialog-head-actions">
-          <button type="button" id="dialog-prev-player" class="btn secondary btn-compact" title="Previous player in table">‹ Prev</button>
-          <button type="button" id="dialog-next-player" class="btn secondary btn-compact" title="Next player in table">Next ›</button>
+          <span id="dialog-row-pos" class="dialog-row-pos" hidden></span>
+          <button type="button" id="dialog-prev-player" class="btn secondary btn-compact" title="Previous player in table (Left Arrow)">‹ Prev</button>
+          <button type="button" id="dialog-next-player" class="btn secondary btn-compact" title="Next player in table (Right Arrow)">Next ›</button>
           <button type="button" id="dialog-copy-name" class="btn secondary">Copy Name</button>
+          <button type="button" id="dialog-pin-compare" class="btn secondary" title="Pin this player to compare against others">Pin Compare</button>
           <button type="button" id="dialog-shortlist-btn" class="btn secondary">Shortlist</button>
           <button type="button" id="dialog-close-btn" class="btn primary" aria-label="Close player profile">Close</button>
         </div>
@@ -396,7 +432,7 @@
         <div id="dialog-radar-panel" class="radar-panel">
           <div class="radar-controls">
             <label>
-              <span>Compare vs Managed Club</span>
+              <span>Compare Player</span>
               <select id="dialog-compare-select"></select>
             </label>
           </div>
@@ -467,6 +503,7 @@
               <span>Enabled only</span>
             </label>
             <button type="button" id="score-defaults-btn" class="btn-link" title="Enable position default metrics">Defaults</button>
+            <button type="button" id="score-equalize-btn" class="btn-link" title="Reset enabled metric weights to 1.0">Equalize 1.0</button>
             <button type="button" id="score-clear-metrics-btn" class="btn-link" title="Disable all metrics">Clear All</button>
             <span id="score-total-weight" class="score-total-weight">Total weight: 0.0</span>
           </div>
@@ -495,10 +532,22 @@
         </div>
       </header>
       <div class="shortlist-body">
-        <label class="field shortlist-filter">
-          <span>Position</span>
-          <select id="shortlist-position"><option value="">All Positions</option></select>
-        </label>
+        <div class="shortlist-controls">
+          <label class="field shortlist-filter">
+            <span>Position</span>
+            <select id="shortlist-position"><option value="">All Positions</option></select>
+          </label>
+          <label class="field shortlist-filter">
+            <span>Sort by</span>
+            <select id="shortlist-sort">
+              <option value="added">Recently Added</option>
+              <option value="score">Role Score</option>
+              <option value="value">Transfer Value</option>
+              <option value="age">Age</option>
+              <option value="name">Name</option>
+            </select>
+          </label>
+        </div>
         <div class="shortlist-items" id="shortlist-body"></div>
       </div>
     </div>

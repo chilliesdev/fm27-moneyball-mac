@@ -1,16 +1,25 @@
-import { DEFAULT_AXES, PROGRESSION_AXES, collator } from "./constants.js";
+import { DEFAULT_AXES, PROGRESSION_AXES, SCATTER_PRESETS, collator } from "./constants.js";
 import { activeDataset, els, state } from "./state.js";
 import { getMetricCatalog, getPlayerMetricPct } from "./scoring.js";
 import {
   clubImgUrl,
   clubNameOf,
   escapeHtml,
-  formatMoney,
+  formatPlayerValue,
   formatStat,
   getThemeColors,
   personImgUrl,
   playerName,
 } from "./utils.js";
+
+export function syncScatterPresetSelect(position) {
+  if (!els.scatterPreset) return;
+  const presets = SCATTER_PRESETS[position] || [];
+  const x = els.scatterX.value;
+  const y = els.scatterY.value;
+  const matchIdx = presets.findIndex((p) => p.x === x && p.y === y);
+  els.scatterPreset.value = matchIdx >= 0 ? String(matchIdx) : "";
+}
 
 export function populateScatterAxes(dataset, preserveAxes) {
   const catalog = getMetricCatalog(dataset);
@@ -43,6 +52,15 @@ export function populateScatterAxes(dataset, preserveAxes) {
   const [defX, defY] = DEFAULT_AXES[dataset.position] || [defaultItems[0]?.key, defaultItems[1]?.key];
   els.scatterX.value = preserveAxes && catalog.byKey.has(prevX) ? prevX : defX;
   els.scatterY.value = preserveAxes && catalog.byKey.has(prevY) ? prevY : defY;
+
+  if (els.scatterPreset) {
+    const presets = SCATTER_PRESETS[dataset.position] || [];
+    els.scatterPreset.innerHTML = [
+      `<option value="">Custom Axes</option>`,
+      ...presets.map((p, idx) => `<option value="${idx}">${escapeHtml(p.label)}</option>`),
+    ].join("");
+    syncScatterPresetSelect(dataset.position);
+  }
 }
 
 export function ensureScatterChart(onPlayerClick) {
@@ -198,8 +216,8 @@ export function renderScatter(dataset, onPlayerClick) {
       },
     },
     dataZoom: [
-      { type: "inside", xAxisIndex: 0, filterMode: "none" },
-      { type: "inside", yAxisIndex: 0, filterMode: "none" },
+      { type: "inside", xAxisIndex: 0, filterMode: "none", zoomOnMouseWheel: "ctrl" },
+      { type: "inside", yAxisIndex: 0, filterMode: "none", zoomOnMouseWheel: "ctrl" },
     ],
     tooltip: {
       trigger: "item",
@@ -229,7 +247,7 @@ export function renderScatter(dataset, onPlayerClick) {
               ${escapeHtml(xMeta.label)}: <strong>${formatStat(xKey, p[xKey])}</strong><br>
               ${escapeHtml(yMeta.label)}: <strong>${formatStat(yKey, p[yKey])}</strong>
             </div>
-            <div>Value: ${formatMoney(p.value)} · Score: <strong>${Number(p.active_score ?? 0).toFixed(1)}</strong></div>
+            <div>Value: ${escapeHtml(formatPlayerValue(p))} · Score: <strong>${Number(p.active_score ?? 0).toFixed(1)}</strong></div>
           </div>
         `;
       },
