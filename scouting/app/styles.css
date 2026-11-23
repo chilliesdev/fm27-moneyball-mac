@@ -313,6 +313,60 @@ input:focus-visible {
   padding: 0.9rem 1rem;
 }
 
+.filters-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  margin-block-end: 0.75rem;
+}
+
+.filters-header.is-collapsed {
+  margin-block-end: 0;
+}
+
+.filters-header-left,
+.filters-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.filters-toggle-caret {
+  display: inline-block;
+  transition: transform 0.15s ease;
+}
+
+#btn-toggle-filters[aria-expanded="false"] .filters-toggle-caret {
+  transform: rotate(-90deg);
+}
+
+.filter-grid[hidden] {
+  display: none;
+}
+
+.filter-warning {
+  margin-block-start: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 7px;
+  border: 1px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--text);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.filter-warning[hidden] {
+  display: none;
+}
+
+.btn.is-pending {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .filter-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(175px, 1fr));

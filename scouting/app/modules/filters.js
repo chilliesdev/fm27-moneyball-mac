@@ -7,7 +7,7 @@ import {
   STATUS_OPTIONS,
   collator,
 } from "./constants.js";
-import { activeDataset, els, FACETS, seasonEndYear, state } from "./state.js";
+import { activeDataset, els, FACETS, saveLastView, saveSavedViews, seasonEndYear, state } from "./state.js";
 import { datasetHasClubReputation } from "./scoring.js";
 import {
   clubImgUrl,
@@ -320,6 +320,137 @@ export function renderAllPopovers(dataset) {
   }
 }
 
+export function getFilterRangeConflicts() {
+  const conflicts = [];
+  const minAge = els.minAge.value === "" ? NaN : els.minAge.valueAsNumber;
+  const maxAge = Number(els.maxAge.value);
+  if (Number.isFinite(minAge) && maxAge < 99 && minAge > maxAge) {
+    conflicts.push(`Min Age (${minAge}) > Max Age (${maxAge})`);
+  }
+  const minVal = els.minVal.value === "" ? NaN : Number(els.minVal.value);
+  const maxVal = Number(els.maxVal.value);
+  if (Number.isFinite(minVal) && maxVal < 999999999 && minVal > maxVal) {
+    conflicts.push(`Min Value (${formatMoney(minVal)}) > Max Value (${formatMoney(maxVal)})`);
+  }
+  const minWage = els.minWage.value === "" ? NaN : Number(els.minWage.value);
+  const maxWage = Number(els.maxWage.value);
+  if (Number.isFinite(minWage) && maxWage < 999999999 && minWage > maxWage) {
+    conflicts.push(`Min Wage (${formatMoney(minWage)}/wk) > Max Wage (${formatMoney(maxWage)}/wk)`);
+  }
+  return conflicts;
+}
+
+export function describeActiveDefaultCaps() {
+  const caps = [];
+  if (els.minMins.value !== "0") caps.push(`Mins ≥ ${els.minMins.value}`);
+  if (els.maxAge.value !== "99") caps.push(`Age ≤ ${els.maxAge.value}`);
+  if (els.maxVal.value !== "999999999") caps.push(`Value ≤ ${formatMoney(els.maxVal.value)}`);
+  if (els.maxWage.value !== "999999999") caps.push(`Wage ≤ ${formatMoney(els.maxWage.value)}/wk`);
+  if (els.minRep.value !== "0") caps.push(`Rep ≥ ${Number(els.minRep.value).toLocaleString()}`);
+  return caps;
+}
+
+export function updateFilterMetaAndWarnings(chipCount = 0) {
+  const conflicts = getFilterRangeConflicts();
+  if (els.filterWarning) {
+    if (conflicts.length) {
+      els.filterWarning.textContent = `Filter conflict: ${conflicts.join(" · ")}. Adjust min/max bounds to see players.`;
+      els.filterWarning.hidden = false;
+    } else {
+      els.filterWarning.textContent = "";
+      els.filterWarning.hidden = true;
+    }
+  }
+  if (els.filterToggleMeta) {
+    const caps = describeActiveDefaultCaps();
+    els.filterToggleMeta.textContent = chipCount > 0
+      ? `${chipCount} custom filter${chipCount > 1 ? "s" : ""} active`
+      : caps.length ? `Defaults: ${caps.join(" · ")}` : "All players";
+  }
+}
+
+export function captureViewSnapshot() {
+  const facets = {};
+  for (const key of Object.keys(state.filters)) {
+    facets[key] = [...state.filters[key]];
+  }
+  const scalars = {};
+  for (const key of Object.keys(DEFAULT_FILTERS)) {
+    const el = els[key];
+    if (!el) continue;
+    scalars[key] = typeof DEFAULT_FILTERS[key] === "boolean" ? el.checked : el.value;
+  }
+  return {
+    pos: state.pos,
+    search: els.search.value,
+    facets,
+    scalars,
+    role: els.role.value && els.role.value !== "__custom_draft__" ? els.role.value : "overall",
+    scatterX: els.scatterX.value,
+    scatterY: els.scatterY.value,
+  };
+}
+
+export function isNonDefaultView(snap) {
+  if (!snap) return false;
+  if (snap.pos && snap.pos !== "ST") return true;
+  if (snap.search) return true;
+  if (Object.values(snap.facets || {}).some((arr) => Array.isArray(arr) && arr.length > 0)) return true;
+  for (const [k, defVal] of Object.entries(DEFAULT_FILTERS)) {
+    if (snap.scalars?.[k] !== undefined && snap.scalars[k] !== defVal) return true;
+  }
+  return false;
+}
+
+export function persistLastViewSnapshot() {
+  const snap = captureViewSnapshot();
+  if (isNonDefaultView(snap)) saveLastView(snap);
+}
+
+export function renderSavedViewsSelect(selectedId = "") {
+  if (!els.savedViewSelect) return;
+  const views = Array.isArray(state.savedViews) ? state.savedViews : [];
+  els.savedViewSelect.innerHTML = [
+    `<option value="">— Saved Views —</option>`,
+    ...views.map((v) => `<option value="${escapeHtml(v.id)}">${escapeHtml(v.name)} (${escapeHtml(v.pos || "ST")})</option>`),
+  ].join("");
+  els.savedViewSelect.value = selectedId && views.some((v) => v.id === selectedId) ? selectedId : "";
+  if (els.btnDeleteView) els.btnDeleteView.disabled = !els.savedViewSelect.value;
+}
+
+export async function applyViewSnapshot(snap, selectPositionFn, refreshFn) {
+  if (!snap) return;
+  els.search.value = snap.search || "";
+  for (const key of Object.keys(state.filters)) {
+    state.filters[key].clear();
+    for (const val of snap.facets?.[key] || []) {
+      state.filters[key].add(val);
+    }
+  }
+  for (const [id, defVal] of Object.entries(DEFAULT_FILTERS)) {
+    const el = els[id];
+    if (!el) continue;
+    const val = snap.scalars?.[id] ?? defVal;
+    if (typeof defVal === "boolean") el.checked = Boolean(val);
+    else el.value = String(val);
+  }
+  const targetPos = snap.pos || state.pos;
+  if (targetPos !== state.pos && selectPositionFn) {
+    await selectPositionFn(targetPos);
+  }
+  if (snap.role && [...els.role.options].some((o) => o.value === snap.role)) {
+    els.role.value = snap.role;
+    els.role.dispatchEvent(new Event("change"));
+  }
+  if (snap.scatterX && [...els.scatterX.options].some((o) => o.value === snap.scatterX)) {
+    els.scatterX.value = snap.scatterX;
+  }
+  if (snap.scatterY && [...els.scatterY.options].some((o) => o.value === snap.scatterY)) {
+    els.scatterY.value = snap.scatterY;
+  }
+  refreshFn();
+}
+
 export function renderActiveFilterChips(dataset, onRefresh) {
   const chips = [];
   const scalar = readScalarFilters();
@@ -390,6 +521,8 @@ export function renderActiveFilterChips(dataset, onRefresh) {
     chips.push({ type: "scalar", id: "includeHull", label: "Exclude managed club" });
   }
 
+  updateFilterMetaAndWarnings(chips.length);
+
   if (!chips.length) {
     els.activeFiltersBar.hidden = true;
     els.activeFiltersChips.innerHTML = "";
@@ -422,6 +555,20 @@ export function renderActiveFilterChips(dataset, onRefresh) {
       onRefresh();
     });
   });
+}
+
+export function saveCurrentView(showToastFn = showToast) {
+  const views = Array.isArray(state.savedViews) ? state.savedViews : [];
+  const roleLabel = els.role?.selectedOptions?.[0]?.textContent?.trim() || "Overall";
+  const snap = captureViewSnapshot();
+  const scope = snap.facets.leagues?.length === 1 ? snap.facets.leagues[0] : state.pos;
+  const name = `${scope} · ${roleLabel} (#${views.length + 1})`;
+  const id = `v_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+  const entry = { id, name, ...snap };
+  state.savedViews = [...views, entry];
+  saveSavedViews();
+  renderSavedViewsSelect(id);
+  showToastFn(`Saved view "${name}"`);
 }
 
 export function resetAllFilters(onRefresh) {

@@ -48,10 +48,23 @@ export const DEFAULT_FILTERS = {
   includeHull: true,
 };
 
+export const PROGRESSION_AXES = {
+  ST: ["npxg_p90", "xa_p90"],
+  W: ["npxg_p90", "xa_p90"],
+  AM: ["npxg_p90", "xa_p90"],
+  CM: ["prog_passes_p90", "tackles_cmp_p90"],
+  DM: ["prog_passes_p90", "tackles_cmp_p90"],
+  FB_WB: ["xa_p90", "tackles_cmp_p90"],
+  CB: ["headers_won_pct", "prog_passes_p90"],
+  GK: ["xg_prevented_p90", "goals_allowed_p90"],
+};
+
 export const SHORTLIST_KEY = "fm27_moneyball_shortlist_v1";
 export const LEGACY_SHORTLIST_KEY = "hull_fm27_moneyball_shortlist_v1";
 export const PRESETS_KEY = "fm27_moneyball_role_presets_v1";
 export const COLS_KEY = "fm27_moneyball_cols_v1";
+export const SAVED_VIEWS_KEY = "fm27_moneyball_saved_views_v1";
+export const LAST_VIEW_KEY = "fm27_moneyball_last_view_v1";
 
 export const METHOD_HINTS = {
   percentile: "Mid-rank percentile (0–100) within the active baseline pool.",

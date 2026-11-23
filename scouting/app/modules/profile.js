@@ -22,10 +22,42 @@ function renderProfileFacts(element, facts) {
   ).join("");
 }
 
+function getOrderedTableRows() {
+  if (state.tabulatorTable) {
+    try {
+      const rows = state.tabulatorTable.getData("active");
+      if (Array.isArray(rows) && rows.length) return rows;
+    } catch {
+      // Fallback to state.filtered
+    }
+  }
+  return state.filtered || [];
+}
+
+function updatePrevNextButtons(player, dataset) {
+  if (!els.dialogPrevPlayer || !els.dialogNextPlayer) return;
+  const rows = dataset ? getOrderedTableRows() : [];
+  const idx = rows.findIndex((r) => r.uid === player.uid);
+  const canStep = Boolean(dataset) && idx >= 0 && rows.length > 1;
+  els.dialogPrevPlayer.disabled = !canStep || idx <= 0;
+  els.dialogNextPlayer.disabled = !canStep || idx >= rows.length - 1;
+}
+
+export function stepPlayerDialog(delta, loadPositionFn) {
+  const active = state.activeProfile;
+  if (!active?.dataset) return;
+  const rows = getOrderedTableRows();
+  const idx = rows.findIndex((r) => r.uid === active.player.uid);
+  const next = rows[idx + delta];
+  if (!next) return;
+  openPlayerDialog(next, active.dataset, active.season, loadPositionFn);
+}
+
 export function openPlayerDialog(player, dataset, season = state.season, loadPositionFn) {
   state.activeProfile = { player, dataset, season };
   state.dialogOpenToken += 1;
   const openToken = state.dialogOpenToken;
+  updatePrevNextButtons(player, dataset);
 
   els.dialogPlayerImg.src = personImgUrl(player);
   els.dialogPlayerImg.alt = playerName(player);
@@ -76,6 +108,13 @@ export function openPlayerDialog(player, dataset, season = state.season, loadPos
   const hullOther = (managedSquad || []).filter(
     (p) => p.uid !== player.uid && !hullPool.some((h) => h.uid === p.uid)
   );
+  const shortlistCompare = dataset.players.filter(
+    (p) =>
+      p.uid !== player.uid &&
+      Boolean(state.shortlist[p.uid]) &&
+      !hullPool.some((h) => h.uid === p.uid) &&
+      !hullOther.some((h) => h.uid === p.uid)
+  );
   els.dialogCompareSelect.innerHTML = [
     `<option value="">No comparison</option>`,
     ...hullPool.map(
@@ -84,6 +123,16 @@ export function openPlayerDialog(player, dataset, season = state.season, loadPos
     ...hullOther.map(
       (h) => `<option value="${escapeHtml(h.uid)}">${escapeHtml(playerName(h))} (${escapeHtml(h.positions)}, ${h.minutes}m)</option>`
     ),
+    ...(shortlistCompare.length
+      ? [
+          `<optgroup label="Shortlisted">${shortlistCompare
+            .map(
+              (s) =>
+                `<option value="${escapeHtml(s.uid)}">${escapeHtml(playerName(s))} (${escapeHtml(clubNameOf(s))}, ${s.minutes}m)</option>`
+            )
+            .join("")}</optgroup>`,
+        ]
+      : []),
   ].join("");
 
   const benchUid = els.benchmark.value;
@@ -96,8 +145,12 @@ export function openPlayerDialog(player, dataset, season = state.season, loadPos
 
   const drawCompare = () => {
     const cid = els.dialogCompareSelect.value;
-    const cmp = hullPool.find((h) => h.uid === cid) || hullOther.find((h) => h.uid === cid) || null;
-    const clubLabel = season === state.season ? state.meta?.club_short_name || "Club" : clubNameOf(cmp);
+    const cmp =
+      hullPool.find((h) => h.uid === cid) ||
+      hullOther.find((h) => h.uid === cid) ||
+      shortlistCompare.find((s) => s.uid === cid) ||
+      null;
+    const clubLabel = cmp?.is_hull && season === state.season ? state.meta?.club_short_name || "Club" : clubNameOf(cmp);
     renderRadar(player, cmp, dataset, baseline, clubLabel);
   };
   els.dialogCompareSelect.onchange = drawCompare;
@@ -133,6 +186,7 @@ export function toggleRowShortlist(player, position = state.pos, season = state.
   if (state.shortlist[uid]) {
     delete state.shortlist[uid];
     saveShortlist();
+    window.dispatchEvent(new Event("moneyball:shortlist-changed"));
     showToast(`Removed ${name} from shortlist`);
     return false;
   }
@@ -140,9 +194,14 @@ export function toggleRowShortlist(player, position = state.pos, season = state.
     uid,
     name: player.name ?? "",
     club: clubNameOf(player),
+    league: player.league ?? "",
+    nation: player.nation ?? "",
+    foot: player.foot ?? "",
     age: player.age,
     positions: player.positions,
     minutes: player.minutes,
+    avg_rating: player.avg_rating,
+    active_score: player.active_score,
     value: player.value,
     wage: player.wage,
     contract_end: player.contract_end,
@@ -151,6 +210,7 @@ export function toggleRowShortlist(player, position = state.pos, season = state.
     ...(position ? {} : { profile: player }),
   };
   saveShortlist();
+  window.dispatchEvent(new Event("moneyball:shortlist-changed"));
   showToast(`Added ${name} to shortlist`);
   return true;
 }

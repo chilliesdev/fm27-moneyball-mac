@@ -54,7 +54,27 @@
     </nav>
 
     <section class="filters-panel" aria-label="Scouting filters">
-      <div class="filter-grid">
+      <div class="filters-header">
+        <div class="filters-header-left">
+          <button type="button" id="btn-toggle-filters" class="btn secondary btn-compact" aria-expanded="true" aria-controls="filter-grid">
+            <span class="filters-toggle-caret" aria-hidden="true">▾</span>
+            <span>Filters</span>
+          </button>
+          <span id="filter-toggle-meta" class="subtitle"></span>
+        </div>
+        <div class="filters-header-actions">
+          <button type="button" id="btn-restore-view" class="btn secondary btn-compact" hidden>Restore Last View</button>
+          <label class="top-select view-select">
+            <span>View</span>
+            <select id="f-saved-view" aria-label="Saved scouting views">
+              <option value="">— Saved Views —</option>
+            </select>
+          </label>
+          <button type="button" id="btn-save-view" class="btn secondary btn-compact" title="Save current filters and axes as a view">Save View</button>
+          <button type="button" id="btn-delete-view" class="btn secondary btn-compact" title="Delete selected view" disabled>Delete</button>
+        </div>
+      </div>
+      <div id="filter-grid" class="filter-grid">
         <div class="field search-field">
           <label for="f-search">Search Player / Club <kbd class="kbd-hint" aria-hidden="true">/</kbd></label>
           <input type="search" id="f-search" placeholder="Name or club..." autocomplete="off" role="combobox"
@@ -209,7 +229,7 @@
         </label>
 
         <label class="field">
-          <span>Max Transfer Value</span>
+          <span>Max Transfer Value (£)</span>
           <select id="f-max-val">
             <option value="999999999">Any Value</option>
             <option value="1000000">&le; 1M</option>
@@ -236,7 +256,7 @@
         </label>
 
         <label class="field">
-          <span>Max Weekly Wage</span>
+          <span>Max Weekly Wage (£)</span>
           <select id="f-max-wage">
             <option value="999999999" selected>Any Wage</option>
             <option value="15000">&le; 15k/wk</option>
@@ -288,6 +308,8 @@
         </label>
       </div>
 
+      <div id="filter-warning" class="filter-warning" role="alert" hidden></div>
+
       <div id="active-filters-bar" class="active-filters-bar" hidden>
         <div id="active-filters-chips" class="active-filters-chips" aria-label="Active filters"></div>
         <button type="button" id="btn-reset-filters" class="btn secondary btn-compact">Reset Filters</button>
@@ -305,6 +327,7 @@
             <span>X Axis</span>
             <select id="scatter-x"></select>
           </label>
+          <button type="button" id="btn-swap-axes" class="btn secondary btn-compact" title="Swap X and Y axes" aria-label="Swap X and Y axes">⇄ Swap</button>
           <label>
             <span>Y Axis</span>
             <select id="scatter-y"></select>
@@ -353,6 +376,8 @@
           </div>
         </div>
         <div class="dialog-head-actions">
+          <button type="button" id="dialog-prev-player" class="btn secondary btn-compact" title="Previous player in table">‹ Prev</button>
+          <button type="button" id="dialog-next-player" class="btn secondary btn-compact" title="Next player in table">Next ›</button>
           <button type="button" id="dialog-copy-name" class="btn secondary">Copy Name</button>
           <button type="button" id="dialog-shortlist-btn" class="btn secondary">Shortlist</button>
           <button type="button" id="dialog-close-btn" class="btn primary" aria-label="Close player profile">Close</button>
@@ -425,6 +450,7 @@
           </label>
           <div class="score-preset-btns">
             <button type="button" id="score-save-preset-btn" class="btn primary btn-compact">Save Preset</button>
+            <button type="button" id="score-update-preset-btn" class="btn secondary btn-compact" disabled>Update</button>
             <button type="button" id="score-rename-preset-btn" class="btn secondary btn-compact" disabled>Rename</button>
             <button type="button" id="score-delete-preset-btn" class="btn secondary btn-compact" disabled>Delete</button>
           </div>
@@ -440,6 +466,8 @@
               <input type="checkbox" id="score-enabled-only">
               <span>Enabled only</span>
             </label>
+            <button type="button" id="score-defaults-btn" class="btn-link" title="Enable position default metrics">Defaults</button>
+            <button type="button" id="score-clear-metrics-btn" class="btn-link" title="Disable all metrics">Clear All</button>
             <span id="score-total-weight" class="score-total-weight">Total weight: 0.0</span>
           </div>
           <div id="score-metrics-list" class="score-metrics-list"></div>

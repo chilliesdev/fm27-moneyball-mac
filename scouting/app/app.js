@@ -9,6 +9,7 @@ import {
   FACETS,
   activeDataset,
   els,
+  saveSavedViews,
   saveShortlist,
   seasonEndYear,
   state,
@@ -33,15 +34,22 @@ import {
   refreshRoleSelectOptions,
 } from "./modules/scoring.js";
 import {
+  applyViewSnapshot,
+  describeActiveDefaultCaps,
   getClubCatalog,
+  getFilterRangeConflicts,
+  isNonDefaultView,
   matchesLocation,
   matchesPlayer,
   matchesSearch,
+  persistLastViewSnapshot,
   readScalarFilters,
   renderActiveFilterChips,
   renderAllPopovers,
   renderFacetOptions,
+  renderSavedViewsSelect,
   resetAllFilters,
+  saveCurrentView,
   wirePopoverBehaviors,
 } from "./modules/filters.js";
 import {
@@ -54,6 +62,7 @@ import {
   openPlayerDialog,
   openShortlistedPlayer,
   renderShortlist,
+  stepPlayerDialog,
   toggleRowShortlist,
 } from "./modules/profile.js";
 import { initOrUpdateTable, renderColumnChooser } from "./modules/table.js";
@@ -160,19 +169,25 @@ async function loadMeta(season = state.season) {
 
 function populatePositionControls(dataset) {
   const samePosition = state.scoreConfig?.pos === dataset.position;
-  const prevRole = els.role.value;
-  const validPrev =
-    prevRole === "overall" ||
-    Boolean(dataset.roles?.[prevRole]) ||
-    (prevRole.startsWith("custom:") && (state.presets?.[dataset.position] || []).some((p) => `custom:${p.id}` === prevRole));
-  const initialRole = validPrev ? prevRole : "overall";
+  const savedDraft = !samePosition ? state.customDrafts[dataset.position] : null;
+  if (savedDraft) {
+    state.scoreConfig = savedDraft;
+    refreshRoleSelectOptions(dataset, "__custom_draft__");
+  } else {
+    const prevRole = els.role.value;
+    const validPrev =
+      prevRole === "overall" ||
+      Boolean(dataset.roles?.[prevRole]) ||
+      (prevRole.startsWith("custom:") && (state.presets?.[dataset.position] || []).some((p) => `custom:${p.id}` === prevRole));
+    const initialRole = validPrev ? prevRole : "overall";
 
-  state.scoreConfig = buildScoreConfigFromRole(
-    dataset,
-    initialRole,
-    initialRole.startsWith("custom:") ? null : state.scoreConfig?.method || "percentile"
-  );
-  refreshRoleSelectOptions(dataset, state.scoreConfig.roleSlug);
+    state.scoreConfig = buildScoreConfigFromRole(
+      dataset,
+      initialRole,
+      initialRole.startsWith("custom:") ? null : state.scoreConfig?.method || "percentile"
+    );
+    refreshRoleSelectOptions(dataset, state.scoreConfig.roleSlug);
+  }
   populateScatterAxes(dataset, samePosition);
 
   const hullInPos = dataset.players.filter((p) => p.is_hull);
@@ -240,9 +255,11 @@ function renderSearchSuggestions() {
       <span>${escapeHtml(value)}</span><small>${escapeHtml(detail)}</small>
     </li>
   `).join("");
-  const gridBottom = els.search.closest(".filter-grid").getBoundingClientRect().bottom;
+  const gridBottom = els.search.closest(".filter-grid")?.getBoundingClientRect().bottom ?? window.innerHeight;
   const searchBottom = els.search.getBoundingClientRect().bottom;
-  els.searchSuggestions.style.maxBlockSize = `min(20rem, ${gridBottom - searchBottom}px)`;
+  const inGridSpace = gridBottom - searchBottom;
+  const avail = inGridSpace >= 120 ? inGridSpace : Math.max(140, window.innerHeight - searchBottom - 16);
+  els.searchSuggestions.style.maxBlockSize = `min(20rem, ${avail}px)`;
   els.searchSuggestions.hidden = false;
   els.search.setAttribute("aria-expanded", "true");
 }
@@ -295,6 +312,10 @@ function wireSearchSuggestions() {
     } else if (!els.searchSuggestions.hidden && event.key === "Escape") {
       event.preventDefault();
       closeSearchSuggestions();
+    } else if (els.searchSuggestions.hidden && event.key === "Escape" && els.search.value) {
+      event.preventDefault();
+      els.search.value = "";
+      refreshView();
     } else if (!els.searchSuggestions.hidden && event.key === "Enter") {
       const option = els.searchSuggestions.querySelector('[aria-selected="true"]');
       if (option) {
@@ -310,11 +331,17 @@ function renderSquadProfiles() {
   if (!dataset) return;
   const hasLocation = state.filters.leagues.size || state.filters.clubs.size;
   const showSquad = !state.filtered.length && hasLocation && !dataset.players.some((p) => matchesLocation(p));
+  const conflicts = getFilterRangeConflicts();
+  const caps = describeActiveDefaultCaps();
   els.tableCountNote.textContent = state.filtered.length
     ? "Hold Shift + click column headers for multi-column sort"
-    : showSquad
-      ? "No players in the selected clubs or leagues have enough league minutes for scouting in this position."
-      : "No players match the current scouting filters.";
+    : conflicts.length
+      ? `Conflicting bounds (${conflicts.join(" · ")}) — adjust min/max filters above.`
+      : showSquad
+        ? "No players in the selected clubs or leagues have enough league minutes for scouting in this position."
+        : caps.length
+          ? `No players match current filters (active caps: ${caps.join(", ")}). Try Reset Filters or relax bounds.`
+          : "No players match the current scouting filters.";
   els.squadResults.hidden = !showSquad || !state.meta.has_player_search;
   if (els.squadResults.hidden) return;
 
@@ -363,6 +390,7 @@ function refreshView() {
 
   renderAllPopovers(dataset);
   renderActiveFilterChips(dataset, refreshView);
+  persistLastViewSnapshot();
   renderSearchSuggestions();
   renderSquadProfiles();
   renderScatter(dataset, openDialog);
@@ -435,6 +463,7 @@ function wireEvents() {
     if (!dataset) return;
     const val = els.role.value;
     if (val === "__custom_draft__") return;
+    delete state.customDrafts[dataset.position];
     state.scoreConfig = buildScoreConfigFromRole(
       dataset,
       val,
@@ -447,7 +476,55 @@ function wireEvents() {
     el.addEventListener("change", () => {
       const dataset = activeDataset();
       if (dataset) renderScatter(dataset, openDialog);
+      persistLastViewSnapshot();
     });
+  });
+
+  els.btnSwapAxes?.addEventListener("click", () => {
+    const prevX = els.scatterX.value;
+    const prevY = els.scatterY.value;
+    els.scatterX.value = prevY;
+    els.scatterY.value = prevX;
+    const dataset = activeDataset();
+    if (dataset) renderScatter(dataset, openDialog);
+    persistLastViewSnapshot();
+  });
+
+  els.btnToggleFilters?.addEventListener("click", () => {
+    const collapsed = !els.filterGrid.hidden;
+    els.filterGrid.hidden = collapsed;
+    els.btnToggleFilters.setAttribute("aria-expanded", String(!collapsed));
+    els.btnToggleFilters.closest(".filters-header")?.classList.toggle("is-collapsed", collapsed);
+  });
+
+  els.btnSaveView?.addEventListener("click", () => saveCurrentView(showToast));
+
+  els.savedViewSelect?.addEventListener("change", async () => {
+    const id = els.savedViewSelect.value;
+    if (els.btnDeleteView) els.btnDeleteView.disabled = !id;
+    if (!id) return;
+    const view = (state.savedViews || []).find((v) => v.id === id);
+    if (view) {
+      await applyViewSnapshot(view, selectPosition, refreshView);
+      showToast(`Loaded view "${view.name}"`);
+    }
+  });
+
+  els.btnDeleteView?.addEventListener("click", () => {
+    const id = els.savedViewSelect?.value;
+    if (!id) return;
+    const target = (state.savedViews || []).find((v) => v.id === id);
+    state.savedViews = (state.savedViews || []).filter((v) => v.id !== id);
+    saveSavedViews();
+    renderSavedViewsSelect();
+    if (target) showToast(`Deleted view "${target.name}"`);
+  });
+
+  els.btnRestoreView?.addEventListener("click", async () => {
+    if (!state.lastView) return;
+    els.btnRestoreView.hidden = true;
+    await applyViewSnapshot(state.lastView, selectPosition, refreshView);
+    showToast("Restored previous view");
   });
 
   els.btnExportScatter.addEventListener("click", () => {
@@ -521,6 +598,8 @@ function wireEvents() {
     const player = state.activeProfile?.player;
     if (player?.name) copyPlayerName(player);
   });
+  els.dialogPrevPlayer?.addEventListener("click", () => stepPlayerDialog(-1, loadPosition));
+  els.dialogNextPlayer?.addEventListener("click", () => stepPlayerDialog(1, loadPosition));
   els.dialogShortlistBtn.addEventListener("click", () => {
     const profile = state.activeProfile;
     if (!profile) return;
@@ -542,6 +621,9 @@ function wireEvents() {
   els.btnRefreshSave.addEventListener("click", () => {
     refreshFromSave(els.saveSelect.value || null);
   });
+  els.saveSelect.addEventListener("change", () => {
+    if (els.saveSelect.value) refreshFromSave(els.saveSelect.value);
+  });
 
   els.btnShortlistView.addEventListener("click", () => {
     renderShortlist();
@@ -558,6 +640,7 @@ function wireEvents() {
     else if (button.dataset.action === "remove") {
       delete state.shortlist[player.uid];
       saveShortlist();
+      window.dispatchEvent(new Event("moneyball:shortlist-changed"));
       renderShortlist();
       state.tabulatorTable?.getRow(player.uid)?.reformat?.();
     }
@@ -565,22 +648,38 @@ function wireEvents() {
   els.btnClearShortlist.addEventListener("click", () => {
     state.shortlist = {};
     saveShortlist();
+    window.dispatchEvent(new Event("moneyball:shortlist-changed"));
     renderShortlist();
     state.tabulatorTable?.getRows().forEach((r) => r.reformat());
     showToast("Shortlist cleared");
+  });
+
+  let shortlistScatterRaf = null;
+  window.addEventListener("moneyball:shortlist-changed", () => {
+    if (shortlistScatterRaf) cancelAnimationFrame(shortlistScatterRaf);
+    shortlistScatterRaf = requestAnimationFrame(() => {
+      const dataset = activeDataset();
+      if (dataset) renderScatter(dataset, openDialog);
+    });
   });
 
   els.btnExportCsv.addEventListener("click", () => {
     const dataset = activeDataset();
     if (!dataset) return;
     const exportRows = state.tabulatorTable ? state.tabulatorTable.getData("active") : state.filtered;
-    downloadCsv(exportRows, `moneyball_scout_${state.pos}.csv`, dataset);
+    const visibleFields = state.tabulatorTable
+      ? state.tabulatorTable
+          .getColumns()
+          .filter((c) => c.isVisible() && c.getField())
+          .map((c) => c.getField())
+      : null;
+    downloadCsv(exportRows, `moneyball_scout_${state.pos}.csv`, dataset, visibleFields);
   });
 
   els.btnExportShortlist.addEventListener("click", () => {
     const items = filteredShortlist();
     if (!items.length) return;
-    const cols = ["name", "club", "age", "positions", "pos_group", "minutes", "value", "wage", "contract_end"];
+    const cols = ["name", "club", "league", "nation", "foot", "age", "positions", "pos_group", "minutes", "avg_rating", "active_score", "value", "wage", "contract_end"];
     const lines = [
       cols.join(","),
       ...items.map((r) => cols.map((c) => `"${String(r[c] ?? "").replaceAll('"', '""')}"`).join(",")),
@@ -682,8 +781,10 @@ async function refreshFromSave(savePath = null) {
     await loadMeta(state.season);
     await selectPosition(state.pos);
     showToast("Save refreshed");
+    return true;
   } catch (err) {
     els.poolSummary.textContent = `Save refresh failed: ${err.message}`;
+    return false;
   } finally {
     els.btnRefreshSave.disabled = false;
     els.btnRefreshSave.textContent = origText;
@@ -692,6 +793,7 @@ async function refreshFromSave(savePath = null) {
 
 async function init() {
   saveShortlist();
+  renderSavedViewsSelect();
   wireEvents();
 
   let serverStatus = null;
@@ -709,11 +811,19 @@ async function init() {
   const params = new URLSearchParams(window.location.search);
   const shouldAutoRefresh = params.get("auto_refresh") === "1" && serverStatus?.newest_save_stale;
 
-  await loadMeta(state.season);
-  await selectPosition("ST");
+  if (els.btnRestoreView && state.lastView && isNonDefaultView(state.lastView) && !shouldAutoRefresh) {
+    els.btnRestoreView.hidden = false;
+  }
 
   if (shouldAutoRefresh) {
-    await refreshFromSave(serverStatus.saves?.[0]?.path || null);
+    const ok = await refreshFromSave(serverStatus.saves?.[0]?.path || null);
+    if (!ok) {
+      await loadMeta(state.season);
+      await selectPosition("ST");
+    }
+  } else {
+    await loadMeta(state.season);
+    await selectPosition("ST");
   }
 }
 

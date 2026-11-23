@@ -1,4 +1,4 @@
-import { DEFAULT_AXES, collator } from "./constants.js";
+import { DEFAULT_AXES, PROGRESSION_AXES, collator } from "./constants.js";
 import { activeDataset, els, state } from "./state.js";
 import { getMetricCatalog, getPlayerMetricPct } from "./scoring.js";
 import {
@@ -79,6 +79,7 @@ export function renderScatter(dataset, onPlayerClick) {
 
   const others = [];
   const hull = [];
+  const shortlisted = [];
   let sumX = 0;
   let sumY = 0;
   let minX = Infinity;
@@ -87,8 +88,14 @@ export function renderScatter(dataset, onPlayerClick) {
   let maxY = -Infinity;
 
   for (const p of state.filtered) {
-    const x = Number(p[xKey]) || 0;
-    const y = Number(p[yKey]) || 0;
+    const rawX = p[xKey];
+    const rawY = p[yKey];
+    if (rawX === null || rawX === undefined || rawX === "" || rawY === null || rawY === undefined || rawY === "") {
+      continue;
+    }
+    const x = Number(rawX);
+    const y = Number(rawY);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
     sumX += x;
     sumY += y;
     if (x < minX) minX = x;
@@ -107,12 +114,15 @@ export function renderScatter(dataset, onPlayerClick) {
         ? { borderColor: theme.text, borderWidth: 2.5 }
         : { borderColor: theme.surface, borderWidth: 1.5 };
       hull.push(pt);
+    } else if (state.shortlist[p.uid]) {
+      pt.itemStyle = { borderColor: theme.surface, borderWidth: 1.5 };
+      shortlisted.push(pt);
     } else {
       others.push(pt);
     }
   }
 
-  const totalCount = others.length + hull.length;
+  const totalCount = others.length + hull.length + shortlisted.length;
   const avgX = totalCount ? sumX / totalCount : 0;
   const avgY = totalCount ? sumY / totalCount : 0;
   if (!totalCount) {
@@ -133,6 +143,7 @@ export function renderScatter(dataset, onPlayerClick) {
   const xEnd = xMeta.higher_is_better ? padMaxX : avgX;
   const yStart = yMeta.higher_is_better ? avgY : padMinY;
   const yEnd = yMeta.higher_is_better ? padMaxY : avgY;
+  const elitePos = `${yMeta.higher_is_better ? "insideTop" : "insideBottom"}${xMeta.higher_is_better ? "Right" : "Left"}`;
 
   const markLine = totalCount
     ? {
@@ -157,7 +168,7 @@ export function renderScatter(dataset, onPlayerClick) {
         itemStyle: { color: theme.quadrantFill },
         label: {
           show: true,
-          position: "insideTopRight",
+          position: elitePos,
           color: theme.accent,
           fontSize: 10,
           fontWeight: 700,
@@ -166,7 +177,7 @@ export function renderScatter(dataset, onPlayerClick) {
       }
     : undefined;
 
-  const attachMarksToFirst = others.length > 0;
+  const markOwnerIdx = others.length > 0 ? 0 : hull.length > 0 ? 1 : shortlisted.length > 0 ? 2 : -1;
   const clubLabel = state.meta?.club_short_name || "Managed Club";
 
   const option = {
@@ -255,8 +266,8 @@ export function renderScatter(dataset, onPlayerClick) {
         emphasis: { disabled: true },
         z: 2,
         data: others,
-        markLine: attachMarksToFirst ? markLine : undefined,
-        markArea: attachMarksToFirst ? markArea : undefined,
+        markLine: markOwnerIdx === 0 ? markLine : undefined,
+        markArea: markOwnerIdx === 0 ? markArea : undefined,
       },
       {
         name: clubLabel,
@@ -277,8 +288,21 @@ export function renderScatter(dataset, onPlayerClick) {
         labelLayout: { hideOverlap: true },
         z: 6,
         data: hull,
-        markLine: !attachMarksToFirst && hull.length ? markLine : undefined,
-        markArea: !attachMarksToFirst && hull.length ? markArea : undefined,
+        markLine: markOwnerIdx === 1 ? markLine : undefined,
+        markArea: markOwnerIdx === 1 ? markArea : undefined,
+      },
+      {
+        name: "Shortlisted",
+        type: "scatter",
+        large: false,
+        emphasis: { disabled: true },
+        symbol: "triangle",
+        symbolSize: 11,
+        itemStyle: { color: "#16a34a", opacity: 1 },
+        z: 5,
+        data: shortlisted,
+        markLine: markOwnerIdx === 2 ? markLine : undefined,
+        markArea: markOwnerIdx === 2 ? markArea : undefined,
       },
     ],
   };
@@ -404,11 +428,20 @@ export async function renderPlayerProgression(player, position, season, openToke
   state.progressionChart.resize();
 
   const theme = getThemeColors();
-  const isGk = position === "GK";
-  const m1Key = isGk ? "xg_prevented_p90" : "npxg_p90";
-  const m1Label = isGk ? "xG Prevented / 90" : "np-xG / 90";
-  const m2Key = isGk ? "goals_allowed_p90" : "xa_p90";
-  const m2Label = isGk ? "Goals Allowed / 90" : "xA / 90";
+  const dsForPos = activeDataset();
+  const catalog = dsForPos ? getMetricCatalog(dsForPos) : null;
+  const [m1Key, m2Key] = PROGRESSION_AXES[position] || PROGRESSION_AXES.ST;
+  const fallbackLabels = {
+    npxg_p90: "np-xG / 90",
+    xa_p90: "xA / 90",
+    prog_passes_p90: "Prog. Passes / 90",
+    tackles_cmp_p90: "Tackles Won / 90",
+    headers_won_pct: "Headers Won %",
+    xg_prevented_p90: "xG Prevented / 90",
+    goals_allowed_p90: "Goals Allowed / 90",
+  };
+  const m1Label = catalog?.byKey.get(m1Key)?.label || fallbackLabels[m1Key] || m1Key;
+  const m2Label = catalog?.byKey.get(m2Key)?.label || fallbackLabels[m2Key] || m2Key;
 
   const xLabels = history.map((h) => h.season);
 

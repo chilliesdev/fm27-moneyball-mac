@@ -35,6 +35,7 @@ export function renderScoreDialog() {
   ].join("");
   els.scorePresetSelect.value = cfg.presetId && presets.some((p) => p.id === cfg.presetId) ? cfg.presetId : "";
   const activePreset = presets.find((p) => p.id === els.scorePresetSelect.value);
+  if (els.scoreUpdatePresetBtn) els.scoreUpdatePresetBtn.disabled = !activePreset;
   els.scoreRenamePresetBtn.disabled = !activePreset;
   els.scoreDeletePresetBtn.disabled = !activePreset;
   if (activePreset && document.activeElement !== els.scorePresetName) {
@@ -123,9 +124,11 @@ export function renderScoreDialog() {
     }
   }
 
+  const prevScroll = els.scoreMetricsList.scrollTop;
   els.scoreMetricsList.innerHTML = html.length
     ? html.join("")
     : `<div class="popover-empty">No metrics match your filter.</div>`;
+  els.scoreMetricsList.scrollTop = prevScroll;
 
   renderScorePreview(dataset);
 }
@@ -175,36 +178,38 @@ function markScoreCustomDraft() {
   if (!dataset || !state.scoreConfig) return;
   state.scoreConfig.roleSlug = "__custom_draft__";
   state.scoreConfig.presetId = null;
+  state.customDrafts[dataset.position] = state.scoreConfig;
   refreshRoleSelectOptions(dataset, "__custom_draft__");
   els.scorePresetSelect.value = "";
+  if (els.scoreUpdatePresetBtn) els.scoreUpdatePresetBtn.disabled = true;
   els.scoreRenamePresetBtn.disabled = true;
   els.scoreDeletePresetBtn.disabled = true;
 }
 
-function scheduleBackgroundRefresh(onRefresh, immediate = false) {
+function flushScoreDialogChanges(onRefresh) {
   clearTimeout(state.scoreSyncTimer);
   if (state.scoreSyncRaf) cancelAnimationFrame(state.scoreSyncRaf);
-  if (immediate) {
+  if (state.scoreDialogDirty) {
+    state.scoreDialogDirty = false;
     onRefresh();
-    return;
   }
-  state.scoreSyncTimer = setTimeout(() => {
-    state.scoreSyncRaf = requestAnimationFrame(() => {
-      onRefresh();
-    });
-  }, 60);
 }
 
 export function wireScoreDialogEvents(onRefresh) {
   enableLightDismissFallback(els.scoreDialog);
 
   els.btnCustomizeScore.addEventListener("click", () => {
+    state.scoreDialogDirty = false;
     renderScoreDialog();
     els.scoreDialog.showModal();
   });
 
   els.scoreCloseBtn.addEventListener("click", () => {
     els.scoreDialog.close();
+  });
+
+  els.scoreDialog.addEventListener("close", () => {
+    flushScoreDialogChanges(onRefresh);
   });
 
   els.scoreResetBtn.addEventListener("click", () => {
@@ -215,10 +220,12 @@ export function wireScoreDialogEvents(onRefresh) {
       : dataset.roles?.[state.scoreConfig?.roleSlug]
         ? state.scoreConfig.roleSlug
         : "overall";
+    delete state.customDrafts[dataset.position];
     state.scoreConfig = buildScoreConfigFromRole(dataset, baseRole, "percentile");
     refreshRoleSelectOptions(dataset, state.scoreConfig.roleSlug);
     renderScoreDialog();
-    scheduleBackgroundRefresh(onRefresh, true);
+    state.scoreDialogDirty = true;
+    flushScoreDialogChanges(onRefresh);
     showToast("Role score reset");
   });
 
@@ -227,13 +234,41 @@ export function wireScoreDialogEvents(onRefresh) {
     state.scoreConfig.method = els.scoreMethod.value;
     els.scoreMethodHint.textContent = METHOD_HINTS[state.scoreConfig.method] || "";
     const dataset = activeDataset();
-    if (dataset) renderScorePreview(dataset);
-    scheduleBackgroundRefresh(onRefresh, true);
+    if (dataset) {
+      if (state.scoreConfig.roleSlug === "__custom_draft__") {
+        state.customDrafts[dataset.position] = state.scoreConfig;
+      }
+      renderScorePreview(dataset);
+    }
+    state.scoreDialogDirty = true;
   });
 
   els.scoreMetricSearch.addEventListener("input", renderScoreDialog);
   els.scoreCategoryFilter.addEventListener("change", renderScoreDialog);
   els.scoreEnabledOnly.addEventListener("change", renderScoreDialog);
+
+  els.scoreDefaultsBtn?.addEventListener("click", () => {
+    const dataset = activeDataset();
+    if (!dataset || !state.scoreConfig) return;
+    const catalog = getMetricCatalog(dataset);
+    for (const item of state.scoreConfig.metrics) {
+      const cat = catalog.byKey.get(item.key);
+      item.enabled = catalog.defaultKeys.has(item.key);
+      item.weight = 1;
+      if (cat) item.higher_is_better = cat.higher_is_better;
+    }
+    markScoreCustomDraft();
+    renderScoreDialog();
+    state.scoreDialogDirty = true;
+  });
+
+  els.scoreClearMetricsBtn?.addEventListener("click", () => {
+    if (!state.scoreConfig) return;
+    for (const item of state.scoreConfig.metrics) item.enabled = false;
+    markScoreCustomDraft();
+    renderScoreDialog();
+    state.scoreDialogDirty = true;
+  });
 
   els.scoreMetricsList.addEventListener("click", (ev) => {
     const row = ev.target.closest(".score-metric-row");
@@ -249,7 +284,7 @@ export function wireScoreDialogEvents(onRefresh) {
       markScoreCustomDraft();
       const dataset = activeDataset();
       if (dataset) renderScorePreview(dataset);
-      scheduleBackgroundRefresh(onRefresh, true);
+      state.scoreDialogDirty = true;
     }
   });
 
@@ -269,7 +304,7 @@ export function wireScoreDialogEvents(onRefresh) {
       if (num) num.disabled = !item.enabled;
       markScoreCustomDraft();
       updateScoreSharesInPlace(dataset);
-      scheduleBackgroundRefresh(onRefresh, true);
+      state.scoreDialogDirty = true;
     } else if (ev.target.classList.contains("score-weight-num") || ev.target.classList.contains("score-weight-slider")) {
       const val = Math.max(0, Math.min(5, Number(ev.target.value) || 0));
       item.weight = val;
@@ -279,7 +314,7 @@ export function wireScoreDialogEvents(onRefresh) {
       if (num) num.value = String(val);
       markScoreCustomDraft();
       updateScoreSharesInPlace(dataset);
-      scheduleBackgroundRefresh(onRefresh, true);
+      state.scoreDialogDirty = true;
     }
   });
 
@@ -297,7 +332,7 @@ export function wireScoreDialogEvents(onRefresh) {
     if (num) num.value = String(val);
     markScoreCustomDraft();
     updateScoreSharesInPlace(dataset);
-    scheduleBackgroundRefresh(onRefresh, false);
+    state.scoreDialogDirty = true;
   });
 
   els.scorePresetSelect.addEventListener("change", () => {
@@ -305,6 +340,7 @@ export function wireScoreDialogEvents(onRefresh) {
     if (!dataset) return;
     const id = els.scorePresetSelect.value;
     if (!id) {
+      if (els.scoreUpdatePresetBtn) els.scoreUpdatePresetBtn.disabled = true;
       els.scoreRenamePresetBtn.disabled = true;
       els.scoreDeletePresetBtn.disabled = true;
       return;
@@ -312,7 +348,8 @@ export function wireScoreDialogEvents(onRefresh) {
     state.scoreConfig = buildScoreConfigFromRole(dataset, `custom:${id}`);
     refreshRoleSelectOptions(dataset, `custom:${id}`);
     renderScoreDialog();
-    scheduleBackgroundRefresh(onRefresh, true);
+    state.scoreDialogDirty = true;
+    flushScoreDialogChanges(onRefresh);
   });
 
   els.scoreSavePresetBtn.addEventListener("click", () => {
@@ -338,11 +375,38 @@ export function wireScoreDialogEvents(onRefresh) {
     if (!state.presets[pos]) state.presets[pos] = [];
     state.presets[pos].push(newPreset);
     savePresets();
+    delete state.customDrafts[pos];
     state.scoreConfig = buildScoreConfigFromRole(dataset, `custom:${id}`);
     refreshRoleSelectOptions(dataset, `custom:${id}`);
     renderScoreDialog();
-    scheduleBackgroundRefresh(onRefresh, true);
+    state.scoreDialogDirty = true;
+    flushScoreDialogChanges(onRefresh);
     showToast(`Saved preset "${rawName}"`);
+  });
+
+  els.scoreUpdatePresetBtn?.addEventListener("click", () => {
+    const dataset = activeDataset();
+    if (!dataset || !state.scoreConfig) return;
+    const id = els.scorePresetSelect.value;
+    const preset = getPosPresets(dataset.position).find((p) => p.id === id);
+    if (!preset) return;
+    const enabledMetrics = state.scoreConfig.metrics
+      .filter((m) => m.enabled)
+      .map((m) => ({ key: m.key, weight: m.weight, higher_is_better: m.higher_is_better }));
+    if (!enabledMetrics.length) {
+      showToast("Enable at least one metric to update preset");
+      return;
+    }
+    preset.name = els.scorePresetName.value.trim() || preset.name;
+    preset.method = state.scoreConfig.method || "percentile";
+    preset.metrics = enabledMetrics;
+    savePresets();
+    state.scoreConfig = buildScoreConfigFromRole(dataset, `custom:${id}`);
+    refreshRoleSelectOptions(dataset, `custom:${id}`);
+    renderScoreDialog();
+    state.scoreDialogDirty = true;
+    flushScoreDialogChanges(onRefresh);
+    showToast(`Updated preset "${preset.name}"`);
   });
 
   els.scoreRenamePresetBtn.addEventListener("click", () => {
@@ -376,7 +440,8 @@ export function wireScoreDialogEvents(onRefresh) {
     state.scoreConfig = buildScoreConfigFromRole(dataset, "overall", state.scoreConfig?.method);
     refreshRoleSelectOptions(dataset, "overall");
     renderScoreDialog();
-    scheduleBackgroundRefresh(onRefresh, true);
+    state.scoreDialogDirty = true;
+    flushScoreDialogChanges(onRefresh);
     if (target) showToast(`Deleted preset "${target.name}"`);
   });
 }

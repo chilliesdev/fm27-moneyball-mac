@@ -164,28 +164,30 @@ export function parsePlayerPositions(posStr) {
     .filter(Boolean);
 }
 
-export function downloadCsv(rows, filename, dataset) {
+export function downloadCsv(rows, filename, dataset, visibleFields = null) {
   if (!rows.length) return;
-  const cols = [
-    "name",
-    "club",
-    "league",
-    "nation",
-    "foot",
-    "age",
-    "positions",
-    "minutes",
-    "apps",
-    "value",
-    "wage",
-    "contract_end",
-    "avg_rating",
-    "active_score",
-    ...(dataset.metrics || []).map((m) => m.key),
-  ];
+  const cols = visibleFields?.length
+    ? visibleFields
+    : [
+        "name",
+        "club",
+        "league",
+        "nation",
+        "foot",
+        "age",
+        "positions",
+        "minutes",
+        "apps",
+        "value",
+        "wage",
+        "contract_end",
+        "avg_rating",
+        "active_score",
+        ...(dataset.metrics || []).map((m) => m.key),
+      ];
   const escapeCsv = (v) => {
     const s = String(v ?? "");
-    return s.includes(",") || s.includes('"') ? `"${s.replaceAll('"', '""')}"` : s;
+    return s.includes(",") || s.includes('"') || s.includes("\n") ? `"${s.replaceAll('"', '""')}"` : s;
   };
   const lines = [cols.join(","), ...rows.map((r) => cols.map((c) => escapeCsv(r[c])).join(","))];
   const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });

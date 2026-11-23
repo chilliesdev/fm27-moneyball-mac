@@ -1,8 +1,10 @@
 import {
   CLUB_PAGE_SIZE,
   COLS_KEY,
+  LAST_VIEW_KEY,
   LEGACY_SHORTLIST_KEY,
   PRESETS_KEY,
+  SAVED_VIEWS_KEY,
   SHORTLIST_KEY,
   SQUAD_PAGE_SIZE,
 } from "./constants.js";
@@ -52,6 +54,10 @@ export const state = {
   shortlist: loadShortlistWithMigration(),
   presets: loadJsonStorage(PRESETS_KEY, {}),
   colPrefs: loadJsonStorage(COLS_KEY, {}),
+  savedViews: loadJsonStorage(SAVED_VIEWS_KEY, []),
+  lastView: loadJsonStorage(LAST_VIEW_KEY, null),
+  customDrafts: {},
+  scoreDialogDirty: false,
   filters: {
     leagues: new Set(),
     clubs: new Set(),
@@ -111,11 +117,20 @@ export const els = {
   clubListFooter: document.getElementById("club-list-footer"),
   clubListCount: document.getElementById("club-list-count"),
   btnMoreClubs: document.getElementById("btn-more-clubs"),
+  filterGrid: document.getElementById("filter-grid"),
+  btnToggleFilters: document.getElementById("btn-toggle-filters"),
+  filterToggleMeta: document.getElementById("filter-toggle-meta"),
+  filterWarning: document.getElementById("filter-warning"),
+  savedViewSelect: document.getElementById("f-saved-view"),
+  btnSaveView: document.getElementById("btn-save-view"),
+  btnDeleteView: document.getElementById("btn-delete-view"),
+  btnRestoreView: document.getElementById("btn-restore-view"),
   activeFiltersBar: document.getElementById("active-filters-bar"),
   activeFiltersChips: document.getElementById("active-filters-chips"),
   btnResetFilters: document.getElementById("btn-reset-filters"),
   poolSummary: document.getElementById("pool-summary"),
   scatterX: document.getElementById("scatter-x"),
+  btnSwapAxes: document.getElementById("btn-swap-axes"),
   scatterY: document.getElementById("scatter-y"),
   btnExportScatter: document.getElementById("btn-export-scatter"),
   scatterChart: document.getElementById("scatter-chart"),
@@ -138,6 +153,8 @@ export const els = {
   dialogName: document.getElementById("dialog-player-name"),
   dialogMeta: document.getElementById("dialog-player-meta"),
   dialogCopyName: document.getElementById("dialog-copy-name"),
+  dialogPrevPlayer: document.getElementById("dialog-prev-player"),
+  dialogNextPlayer: document.getElementById("dialog-next-player"),
   dialogShortlistBtn: document.getElementById("dialog-shortlist-btn"),
   dialogCloseBtn: document.getElementById("dialog-close-btn"),
   dialogCompareSelect: document.getElementById("dialog-compare-select"),
@@ -161,11 +178,14 @@ export const els = {
   scorePresetSelect: document.getElementById("score-preset-select"),
   scorePresetName: document.getElementById("score-preset-name"),
   scoreSavePresetBtn: document.getElementById("score-save-preset-btn"),
+  scoreUpdatePresetBtn: document.getElementById("score-update-preset-btn"),
   scoreRenamePresetBtn: document.getElementById("score-rename-preset-btn"),
   scoreDeletePresetBtn: document.getElementById("score-delete-preset-btn"),
   scoreMetricSearch: document.getElementById("score-metric-search"),
   scoreCategoryFilter: document.getElementById("score-category-filter"),
   scoreEnabledOnly: document.getElementById("score-enabled-only"),
+  scoreDefaultsBtn: document.getElementById("score-defaults-btn"),
+  scoreClearMetricsBtn: document.getElementById("score-clear-metrics-btn"),
   scoreTotalWeight: document.getElementById("score-total-weight"),
   scoreMetricsList: document.getElementById("score-metrics-list"),
   scorePreviewNote: document.getElementById("score-preview-note"),
@@ -235,6 +255,15 @@ export function savePresets() {
 
 export function saveColPrefs() {
   saveJsonStorage(COLS_KEY, state.colPrefs);
+}
+
+export function saveSavedViews() {
+  saveJsonStorage(SAVED_VIEWS_KEY, state.savedViews);
+}
+
+export function saveLastView(view) {
+  state.lastView = view;
+  saveJsonStorage(LAST_VIEW_KEY, view);
 }
 
 export function activeDataset() {
