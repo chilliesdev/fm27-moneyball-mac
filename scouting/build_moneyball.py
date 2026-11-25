@@ -673,20 +673,44 @@ def _is_women_club(club: Any) -> bool:
     return getattr(club.gender, "raw", 0) == 1
 
 
-def _resolve_club_leagues(
+_CUP_COMP_RE = re.compile(r"\b(?:cup|trophy|coppa|ta[cç]a|coupe|pokal|copa|supercoppa)\b", re.IGNORECASE)
+_RESERVE_LEAGUE_SUFFIX_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\b(?:u-?17|under[- ]?17|sub[- ]?17)\b", re.IGNORECASE), "U17"),
+    (re.compile(r"\b(?:u-?18|under[- ]?18|sub[- ]?18)\b", re.IGNORECASE), "U18"),
+    (re.compile(r"\b(?:u-?19|under[- ]?19|sub[- ]?19|a-junioren|juvenil)\b", re.IGNORECASE), "U19"),
+    (re.compile(r"\b(?:u-?20|under[- ]?20|sub[- ]?20|primavera)\b", re.IGNORECASE), "U20"),
+    (re.compile(r"\b(?:u-?21|under[- ]?21|premier league 2)\b", re.IGNORECASE), "U21"),
+    (re.compile(r"\b(?:u-?23|under[- ]?23|liga revela[cç][aã]o)\b", re.IGNORECASE), "U23"),
+    (re.compile(r"\breserves?\b", re.IGNORECASE), "Reserves"),
+)
+
+
+def _reserve_team_suffix(team_slot: int, league_name: str, nation: str) -> str:
+    for pattern, suffix in _RESERVE_LEAGUE_SUFFIX_PATTERNS:
+        if league_name and pattern.search(league_name):
+            return suffix
+    if team_slot == 1:
+        return "2" if nation == "France" else "II"
+    return "Youth"
+
+
+def _resolve_leagues_from_tables(
     tables: Iterable[Any],
     clubs_by_uid: Mapping[int, Any],
     comps_by_id: Mapping[int, Any],
-) -> dict[int, tuple[str, str]]:
-    best_score: dict[int, tuple[int, int, int]] = {}
-    resolved: dict[int, tuple[str, str]] = {}
+) -> tuple[dict[int, tuple[str, str]], dict[int, tuple[str, str]]]:
+    best_club_score: dict[int, tuple[int, int, int, int]] = {}
+    resolved_clubs: dict[int, tuple[str, str]] = {}
+    best_team_score: dict[int, tuple[int, int, int, int]] = {}
+    resolved_teams: dict[int, tuple[str, str]] = {}
     for table in tables:
         if table.competition_id is None or not table.competition_name or not table.rows:
             continue
-        if not all(row.team_slot == 0 for row in table.rows):
-            continue
         nat_counts: Counter[int] = Counter()
+        slot0_count = 0
         for row in table.rows:
+            if row.team_slot == 0:
+                slot0_count += 1
             club = clubs_by_uid.get(row.club_uid) if row.club_uid is not None else None
             if club is not None and not _is_women_club(club) and club.nation_id is not None:
                 nat_counts[club.nation_id] += 1
@@ -699,17 +723,89 @@ def _resolve_club_leagues(
         comp = comps_by_id.get(table.competition_id)
         league_id = str(comp.database_id) if (comp and comp.database_id is not None) else ""
         club_count = int(table.club_count or len(table.rows))
+        is_cup = 1 if _CUP_COMP_RE.search(table.competition_name) else 0
+        is_senior_table = slot0_count > len(table.rows) / 2.0
+        skip_small_cup = bool(is_cup and not has_rounds and club_count <= 8)
         for row in table.rows:
             if row.club_uid is None:
                 continue
             club = clubs_by_uid.get(row.club_uid)
             if club is None or _is_women_club(club) or club.nation_id != dom_nat:
                 continue
-            score = (club_count, has_rounds, int(row.played or 0))
-            if row.club_uid not in best_score or score > best_score[row.club_uid]:
-                best_score[row.club_uid] = score
-                resolved[row.club_uid] = (table.competition_name, league_id)
-    return resolved
+            played = int(row.played or 0)
+            if is_senior_table and row.team_slot == 0 and not skip_small_cup:
+                club_score = (1 - is_cup, club_count, has_rounds, played)
+                if row.club_uid not in best_club_score or club_score > best_club_score[row.club_uid]:
+                    best_club_score[row.club_uid] = club_score
+                    resolved_clubs[row.club_uid] = (table.competition_name, league_id)
+            row_team_id = getattr(row, "team_id", None)
+            if row_team_id is not None and not skip_small_cup:
+                team_score = (1 - is_cup, has_rounds, club_count, played)
+                if row_team_id not in best_team_score or team_score > best_team_score[row_team_id]:
+                    best_team_score[row_team_id] = team_score
+                    resolved_teams[row_team_id] = (table.competition_name, league_id)
+    return resolved_clubs, resolved_teams
+
+
+def _resolve_club_leagues(
+    tables: Iterable[Any],
+    clubs_by_uid: Mapping[int, Any],
+    comps_by_id: Mapping[int, Any],
+) -> dict[int, tuple[str, str]]:
+    resolved_clubs, _ = _resolve_leagues_from_tables(tables, clubs_by_uid, comps_by_id)
+    return resolved_clubs
+
+
+def _resolve_scheduled_leagues(
+    fixtures: Iterable[Any],
+    clubs_by_uid: Mapping[int, Any],
+    comps_by_id: Mapping[int, Any],
+    season_start_year: int,
+) -> tuple[dict[int, tuple[str, str]], dict[int, tuple[str, str]]]:
+    stages: dict[tuple[str, str, int], set[tuple[int, int]]] = defaultdict(set)
+    team_meta: dict[int, tuple[int, int]] = {}
+    for match in fixtures:
+        home_tid = getattr(match, "home_team_id", None)
+        away_tid = getattr(match, "away_team_id", None)
+        if (
+            match.season_start_year != season_start_year
+            or match.stage_id is None
+            or not match.competition_name
+            or match.round is not None
+            or match.round_index is None
+            or home_tid is None
+            or away_tid is None
+            or home_tid == away_tid
+        ):
+            continue
+        home = clubs_by_uid.get(match.home_club_uid)
+        away = clubs_by_uid.get(match.away_club_uid)
+        if (
+            home is None or away is None
+            or home.nation_id is None or home.nation_id != away.nation_id
+            or _is_women_club(home) or _is_women_club(away)
+        ):
+            continue
+        comp = comps_by_id.get(match.competition_id)
+        league_id = str(comp.database_id) if comp and comp.database_id is not None else ""
+        stages[(match.competition_name, league_id, match.stage_id)].add((home_tid, away_tid))
+        team_meta[home_tid] = (home.uid, int(match.home_team_slot or 0))
+        team_meta[away_tid] = (away.uid, int(match.away_team_slot or 0))
+
+    resolved_clubs: dict[int, tuple[str, str]] = {}
+    resolved_teams: dict[int, tuple[str, str]] = {}
+    for (league, league_id, _), pairs in sorted(stages.items(), key=lambda item: -len(item[1])):
+        teams = {tid for pair in pairs for tid in pair}
+        # Require a complete domestic home-and-away schedule before using it as a league.
+        if len(teams) >= 6 and len(pairs) == len(teams) * (len(teams) - 1):
+            slot0_count = sum(1 for tid in teams if team_meta[tid][1] == 0)
+            is_senior_stage = slot0_count > len(teams) / 2.0
+            for tid in teams:
+                resolved_teams.setdefault(tid, (league, league_id))
+                club_uid, slot = team_meta[tid]
+                if is_senior_stage and slot == 0:
+                    resolved_clubs.setdefault(club_uid, (league, league_id))
+    return resolved_clubs, resolved_teams
 
 
 def _resolve_scheduled_club_leagues(
@@ -718,38 +814,8 @@ def _resolve_scheduled_club_leagues(
     comps_by_id: Mapping[int, Any],
     season_start_year: int,
 ) -> dict[int, tuple[str, str]]:
-    stages: dict[tuple[str, str, int], set[tuple[int, int]]] = defaultdict(set)
-    for match in fixtures:
-        if (
-            match.season_start_year != season_start_year
-            or match.stage_id is None
-            or not match.competition_name
-            or match.round is not None
-            or match.round_index is None
-            or match.home_team_slot != 0
-            or match.away_team_slot != 0
-        ):
-            continue
-        home = clubs_by_uid.get(match.home_club_uid)
-        away = clubs_by_uid.get(match.away_club_uid)
-        if (
-            home is None or away is None or home.uid == away.uid
-            or home.nation_id is None or home.nation_id != away.nation_id
-            or _is_women_club(home) or _is_women_club(away)
-        ):
-            continue
-        comp = comps_by_id.get(match.competition_id)
-        league_id = str(comp.database_id) if comp and comp.database_id is not None else ""
-        stages[(match.competition_name, league_id, match.stage_id)].add((home.uid, away.uid))
-
-    resolved: dict[int, tuple[str, str]] = {}
-    for (league, league_id, _), pairs in sorted(stages.items(), key=lambda item: -len(item[1])):
-        clubs = {uid for pair in pairs for uid in pair}
-        # Require a complete domestic home-and-away schedule before using it as a league.
-        if len(clubs) >= 6 and len(pairs) == len(clubs) * (len(clubs) - 1):
-            for uid in clubs:
-                resolved.setdefault(uid, (league, league_id))
-    return resolved
+    resolved_clubs, _ = _resolve_scheduled_leagues(fixtures, clubs_by_uid, comps_by_id, season_start_year)
+    return resolved_clubs
 
 
 def _safe_pct(num: float, den: float) -> float:
@@ -978,17 +1044,21 @@ def _load_save_snapshot(
             for n in career_save.nations()
         }
         comps_by_id = {c.id: c for c in career_save.competitions()}
-        resolved_leagues = _resolve_club_leagues(
+        table_club_leagues, table_team_leagues = _resolve_leagues_from_tables(
             career_save.league_tables(), clubs_by_uid, comps_by_id
         )
-        scheduled_leagues = _resolve_scheduled_club_leagues(
+        scheduled_club_leagues, scheduled_team_leagues = _resolve_scheduled_leagues(
             career_save.fixtures(), clubs_by_uid, comps_by_id, season_end_year - 1
         )
-        resolved_leagues = scheduled_leagues | resolved_leagues
+        resolved_leagues = scheduled_club_leagues | table_club_leagues
+        resolved_team_leagues = scheduled_team_leagues | table_team_leagues
 
         players_by_uid: dict[int, Any] = {}
         for pl in career_save.players():
-            if _is_women_club(clubs_by_uid.get(pl.club_uid)):
+            team_club_uid = getattr(pl, "team_club_uid", None)
+            if _is_women_club(clubs_by_uid.get(pl.club_uid)) or (
+                team_club_uid is not None and _is_women_club(clubs_by_uid.get(team_club_uid))
+            ):
                 continue
             players_by_uid[pl.uid] = pl
 
@@ -997,11 +1067,27 @@ def _load_save_snapshot(
             kind_str = str(getattr(st.kind, "value", st.kind))
             if kind_str != "league":
                 continue
-            if _is_women_club(clubs_by_uid.get(st.club_uid)):
+            st_club = clubs_by_uid.get(st.club_uid)
+            if _is_women_club(st_club):
                 continue
             mins = float(st.minutes or 0)
             if mins <= 0:
                 continue
+            pl = players_by_uid.get(st.player_uid)
+            if pl is not None:
+                pl_is_first_team = (
+                    getattr(pl, "team_club_uid", None) is None
+                    and getattr(pl, "team_slot", None) in (None, 0)
+                )
+                if pl_is_first_team:
+                    st_slot = getattr(st, "team_slot", None)
+                    is_reserve_slot = st_slot is not None and st_slot > 0
+                    is_child_affiliate = (
+                        st_club is not None
+                        and getattr(st_club, "parent_club_uid", None) == pl.club_uid
+                    )
+                    if is_reserve_slot or is_child_affiliate:
+                        continue
             bucket = stats_agg[st.player_uid]
             for field in SUM_COUNT_FIELDS:
                 val = getattr(st, field, 0)
@@ -1026,6 +1112,7 @@ def _load_save_snapshot(
         "club_reps": club_reps,
         "nations_by_id": nations_by_id,
         "resolved_leagues": resolved_leagues,
+        "resolved_team_leagues": resolved_team_leagues,
         "players_by_uid": players_by_uid,
         "stats_agg": stats_agg,
     }
@@ -1049,6 +1136,7 @@ def _build_player_records(
     club_reps = snapshot["club_reps"]
     nations_by_id = snapshot["nations_by_id"]
     resolved_leagues = snapshot["resolved_leagues"]
+    resolved_team_leagues = snapshot.get("resolved_team_leagues") or {}
     players_by_uid = snapshot["players_by_uid"]
     stats_agg = snapshot["stats_agg"]
     managed_uid = snapshot["managed_uid"]
@@ -1065,18 +1153,33 @@ def _build_player_records(
         if contract and contract.squad_status:
             squad_status = str(getattr(contract.squad_status, "label", contract.squad_status))
 
-        club_uid_str = str(pl.club_uid) if pl.club_uid is not None else ""
-        club_obj = clubs_by_uid.get(pl.club_uid) if pl.club_uid is not None else None
-        is_managed = bool(managed_uid and club_uid_str == managed_uid)
+        parent_club_uid = pl.club_uid
+        team_club_uid = getattr(pl, "team_club_uid", None)
+        team_id = getattr(pl, "team_id", None)
+        team_slot = getattr(pl, "team_slot", None)
+        is_own_reserve_team = (
+            team_club_uid is None
+            and parent_club_uid is not None
+            and team_slot is not None
+            and team_slot > 0
+        )
+        effective_club_uid = team_club_uid if team_club_uid is not None else parent_club_uid
+        parent_club_uid_str = str(parent_club_uid) if parent_club_uid is not None else ""
+        base_club_uid_str = str(effective_club_uid) if effective_club_uid is not None else ""
+        club_uid_str = (
+            f"{base_club_uid_str}:t{team_slot}" if is_own_reserve_team else base_club_uid_str
+        )
+        club_obj = clubs_by_uid.get(effective_club_uid) if effective_club_uid is not None else None
+        is_managed = bool(managed_uid and managed_uid in (parent_club_uid_str, base_club_uid_str))
 
         img_id = str(pl.unique_id if pl.unique_id is not None else pl.uid)
         club_img_id = (
             str(
                 club_obj.unique_id
                 if (club_obj and club_obj.unique_id is not None)
-                else club_uid_str
+                else base_club_uid_str
             )
-            if club_uid_str
+            if base_club_uid_str
             else ""
         )
         nation = nations_by_id.get(pl.nation_id, "") if pl.nation_id is not None else ""
@@ -1087,19 +1190,64 @@ def _build_player_records(
             if (left_foot >= 15 and right_foot >= 15)
             else ("Left" if left_foot > right_foot else "Right")
         )
+        club_nation = (
+            nations_by_id.get(club_obj.nation_id, "")
+            if (club_obj and club_obj.nation_id is not None)
+            else ""
+        )
 
-        if pl.club_uid is None:
+        resolved_reserve_league = ""
+        if effective_club_uid is None:
             league, league_id = "Free Agent", ""
-        elif pl.club_uid in resolved_leagues:
-            league, league_id = resolved_leagues[pl.club_uid]
+        elif is_own_reserve_team:
+            if team_id is not None and team_id in resolved_team_leagues:
+                league, league_id = resolved_team_leagues[team_id]
+                resolved_reserve_league = league
+            else:
+                tier_label = "Reserves" if team_slot == 1 else "Youth"
+                league = f"{club_nation} ({tier_label})" if club_nation else tier_label
+                league_id = ""
+        elif team_id is not None and team_id in resolved_team_leagues:
+            league, league_id = resolved_team_leagues[team_id]
+        elif effective_club_uid in resolved_leagues:
+            league, league_id = resolved_leagues[effective_club_uid]
         else:
-            club_nation = (
-                nations_by_id.get(club_obj.nation_id, "")
-                if (club_obj and club_obj.nation_id is not None)
-                else ""
-            )
             league = f"{club_nation} (Other)" if club_nation else "Other"
             league_id = ""
+
+        if team_club_uid is not None:
+            club_name = (
+                (club_obj.short_name if club_obj else None)
+                or (club_obj.name if club_obj else None)
+                or getattr(pl, "team_club_name", None)
+                or pl.club_short_name
+                or pl.club_name
+                or "Free Agent"
+            )
+        else:
+            base_club_name = (
+                pl.club_short_name
+                or pl.club_name
+                or (club_obj.short_name if club_obj else None)
+                or (club_obj.name if club_obj else None)
+                or "Free Agent"
+            )
+            if is_own_reserve_team and base_club_name != "Free Agent":
+                suffix = _reserve_team_suffix(int(team_slot), resolved_reserve_league, club_nation)
+                club_name = f"{base_club_name} {suffix}"
+            else:
+                club_name = base_club_name
+
+        if effective_club_uid is None or is_own_reserve_team:
+            club_rep = 0
+        elif effective_club_uid in club_reps:
+            club_rep = club_reps[effective_club_uid]
+        elif club_obj and club_obj.reputation is not None:
+            club_rep = int(club_obj.reputation)
+        elif team_club_uid is None:
+            club_rep = pl.club_reputation or 0
+        else:
+            club_rep = 0
 
         base_record: dict[str, Any] = {
             "uid": str(uid),
@@ -1115,8 +1263,8 @@ def _build_player_records(
             "accomplished": ";".join(pl.accomplished_positions or ()),
             "club_uid": club_uid_str,
             "club_img_id": club_img_id,
-            "club": pl.club_short_name or pl.club_name or "Free Agent",
-            "club_rep": club_reps.get(pl.club_uid, pl.club_reputation or 0) if pl.club_uid is not None else 0,
+            "club": club_name,
+            "club_rep": club_rep,
             "league": league,
             "league_id": league_id,
             "on_loan": bool(pl.on_loan),

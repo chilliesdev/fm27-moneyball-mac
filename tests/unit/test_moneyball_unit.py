@@ -11,6 +11,7 @@ from collections import defaultdict
 from datetime import date
 from http import HTTPStatus
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -93,6 +94,330 @@ class BuildMoneyballUnitTests(unittest.TestCase):
             self.assertTrue(target.is_file())
             self.assertEqual(json.loads(target.read_text(encoding="utf-8")), {"ok": True, "n": 2})
             self.assertEqual(len(list(target.parent.iterdir())), 1)
+
+    def test_build_player_records_prefers_affiliate_team_club(self) -> None:
+        def make_stats(minutes: float) -> dict[str, float]:
+            raw: dict[str, float] = defaultdict(float)
+            raw["minutes"] = minutes
+            raw["starts"] = 10.0
+            raw["_rating_sum"] = 70.0
+            raw["_rating_apps"] = 10.0
+            return raw
+
+        def make_player(**overrides: object) -> SimpleNamespace:
+            base = {
+                "uid": 1,
+                "unique_id": 1001,
+                "name": "Test Player",
+                "age": 20,
+                "height_cm": 185,
+                "nation_id": 170,
+                "left_foot": 20,
+                "right_foot": 10,
+                "natural_positions": ("DC",),
+                "accomplished_positions": (),
+                "club_uid": 1686,
+                "club_name": "Atlético de Madrid",
+                "club_short_name": "Atlético de Madrid",
+                "club_reputation": 8827,
+                "team_club_uid": None,
+                "team_club_name": None,
+                "on_loan": False,
+                "loan_parent_club_name": None,
+                "transfer_value": 1_000_000,
+                "transfer_value_state": "ok",
+                "contract": None,
+            }
+            base.update(overrides)
+            return SimpleNamespace(**base)
+
+        clubs_by_uid = {
+            1686: SimpleNamespace(
+                uid=1686, unique_id=1687, name="Atlético de Madrid", short_name="Atlético de Madrid", nation_id=170, reputation=8827
+            ),
+            814105: SimpleNamespace(
+                uid=814105, unique_id=814344, name="A. Madrid C", short_name="A. Madrid C", nation_id=170, reputation=2350
+            ),
+            1478: SimpleNamespace(
+                uid=1478, unique_id=1478, name="FC Porto", short_name="Porto", nation_id=155, reputation=8000
+            ),
+            55000308: SimpleNamespace(
+                uid=55000308, unique_id=55000308, name="FC Porto B", short_name="Porto B", nation_id=155, reputation=4200
+            ),
+            999001: SimpleNamespace(
+                uid=999001, unique_id=999002, name="Unrated B", short_name="Unrated B", nation_id=170, reputation=None
+            ),
+        }
+
+        players = {
+            10: make_player(
+                uid=10,
+                unique_id=1010,
+                name="Jorge Luis Delgado",
+                club_uid=1686,
+                team_club_uid=814105,
+                team_club_name="A. Madrid C",
+            ),
+            11: make_player(
+                uid=11,
+                unique_id=1011,
+                name="First Team CB",
+                club_uid=1686,
+                team_club_uid=None,
+                team_club_name=None,
+            ),
+            12: make_player(
+                uid=12,
+                unique_id=1012,
+                name="Porto B CB",
+                club_uid=1478,
+                club_name="FC Porto",
+                club_short_name="Porto",
+                club_reputation=8000,
+                team_club_uid=55000308,
+                team_club_name="FC Porto B",
+            ),
+            13: make_player(
+                uid=13,
+                unique_id=1013,
+                name="Unrated Affiliate CB",
+                club_uid=1686,
+                team_club_uid=999001,
+                team_club_name="Unrated B",
+            ),
+            14: make_player(
+                uid=14,
+                unique_id=1014,
+                name="Free Agent CB",
+                club_uid=None,
+                club_name=None,
+                club_short_name=None,
+                club_reputation=None,
+                team_club_uid=None,
+                team_club_name=None,
+            ),
+        }
+
+        snapshot = {
+            "clubs_by_uid": clubs_by_uid,
+            "club_reps": {1686: 8827, 814105: 2350, 1478: 8000, 55000308: 4200},
+            "nations_by_id": {170: "Spain", 155: "Portugal"},
+            "resolved_leagues": {
+                1686: ("LALIGA EA SPORTS", "67"),
+                1478: ("Liga Portugal Betclic", "60"),
+                55000308: ("Liga Portugal 2 Meu Super", "61"),
+            },
+            "players_by_uid": players,
+            "stats_agg": {uid: make_stats(900.0) for uid in players},
+            "managed_uid": "1686",
+        }
+
+        pool_records, squad_records, _search_rows, club_catalog = build_moneyball._build_player_records(snapshot)
+        by_name = {r["name"]: r for r in pool_records["CB"]}
+
+        delgado = by_name["Jorge Luis Delgado"]
+        self.assertEqual(delgado["club"], "A. Madrid C")
+        self.assertEqual(delgado["club_uid"], "814105")
+        self.assertEqual(delgado["club_img_id"], "814344")
+        self.assertEqual(delgado["club_rep"], 2350)
+        self.assertEqual(delgado["league"], "Spain (Other)")
+        self.assertEqual(delgado["league_id"], "")
+        self.assertTrue(delgado["is_hull"])
+
+        first_team = by_name["First Team CB"]
+        self.assertEqual(first_team["club"], "Atlético de Madrid")
+        self.assertEqual(first_team["club_uid"], "1686")
+        self.assertEqual(first_team["club_img_id"], "1687")
+        self.assertEqual(first_team["club_rep"], 8827)
+        self.assertEqual(first_team["league"], "LALIGA EA SPORTS")
+        self.assertEqual(first_team["league_id"], "67")
+        self.assertTrue(first_team["is_hull"])
+
+        porto_b = by_name["Porto B CB"]
+        self.assertEqual(porto_b["club"], "Porto B")
+        self.assertEqual(porto_b["club_uid"], "55000308")
+        self.assertEqual(porto_b["club_rep"], 4200)
+        self.assertEqual(porto_b["league"], "Liga Portugal 2 Meu Super")
+        self.assertEqual(porto_b["league_id"], "61")
+        self.assertFalse(porto_b["is_hull"])
+
+        unrated_b = by_name["Unrated Affiliate CB"]
+        self.assertEqual(unrated_b["club"], "Unrated B")
+        self.assertEqual(unrated_b["club_rep"], 0)
+
+        free_agent = by_name["Free Agent CB"]
+        self.assertEqual(free_agent["club"], "Free Agent")
+        self.assertEqual(free_agent["club_uid"], "")
+        self.assertEqual(free_agent["club_rep"], 0)
+        self.assertEqual(free_agent["league"], "Free Agent")
+
+        self.assertEqual(club_catalog["814105"]["club"], "A. Madrid C")
+        self.assertEqual(club_catalog["814105"]["league"], "Spain (Other)")
+        self.assertEqual(club_catalog["55000308"]["club"], "Porto B")
+        self.assertEqual(club_catalog["55000308"]["league"], "Liga Portugal 2 Meu Super")
+        self.assertEqual({r["name"] for r in squad_records}, {"Jorge Luis Delgado", "First Team CB", "Unrated Affiliate CB"})
+
+    def test_build_player_records_own_club_reserves_and_youth(self) -> None:
+        def make_stats(minutes: float) -> dict[str, float]:
+            raw: dict[str, float] = defaultdict(float)
+            raw["minutes"] = minutes
+            raw["starts"] = 12.0
+            raw["_rating_sum"] = 84.0
+            raw["_rating_apps"] = 12.0
+            return raw
+
+        def make_player(**overrides: object) -> SimpleNamespace:
+            base = {
+                "uid": 1,
+                "unique_id": 1001,
+                "name": "Player",
+                "age": 20,
+                "height_cm": 185,
+                "nation_id": 143,
+                "left_foot": 10,
+                "right_foot": 20,
+                "natural_positions": ("STC",),
+                "accomplished_positions": (),
+                "club_uid": 886,
+                "club_name": "Toulouse FC",
+                "club_short_name": "Toulouse",
+                "club_reputation": 6768,
+                "team_id": 686,
+                "team_slot": 0,
+                "team_club_uid": None,
+                "team_club_name": None,
+                "on_loan": False,
+                "loan_parent_club_name": None,
+                "transfer_value": 5000,
+                "transfer_value_state": "ok",
+                "contract": None,
+            }
+            base.update(overrides)
+            return SimpleNamespace(**base)
+
+        clubs_by_uid = {
+            886: SimpleNamespace(uid=886, unique_id=886, name="Toulouse FC", short_name="Toulouse", nation_id=143, reputation=6768),
+            1135: SimpleNamespace(uid=1135, unique_id=1135, name="FC Internazionale Milano", short_name="Inter", nation_id=150, reputation=8420),
+            665: SimpleNamespace(uid=665, unique_id=665, name="Hull City AFC", short_name="Hull City", nation_id=139, reputation=6782),
+        }
+        players = {
+            1: make_player(uid=1, name="Toulouse First Team", club_uid=886, team_id=686, team_slot=0),
+            2: make_player(uid=2, name="Enzo Faty", club_uid=886, team_id=17585, team_slot=1),
+            3: make_player(uid=3, name="Toulouse U19 ST", club_uid=886, team_id=35248, team_slot=2),
+            4: make_player(
+                uid=4,
+                name="Inter U23 ST",
+                club_uid=1135,
+                club_name="FC Internazionale Milano",
+                club_short_name="Inter",
+                club_reputation=8420,
+                team_id=34147,
+                team_slot=1,
+            ),
+            5: make_player(
+                uid=5,
+                name="Hull U21 ST",
+                club_uid=665,
+                club_name="Hull City AFC",
+                club_short_name="Hull City",
+                club_reputation=6782,
+                team_id=35041,
+                team_slot=1,
+            ),
+        }
+        snapshot = {
+            "clubs_by_uid": clubs_by_uid,
+            "club_reps": {886: 6768, 1135: 8420, 665: 6782},
+            "nations_by_id": {143: "France", 150: "Italy", 139: "England"},
+            "resolved_leagues": {886: ("Ligue 1 McDonald's", "16"), 1135: ("Serie A Enilive", "32"), 665: ("Premier League", "11")},
+            "resolved_team_leagues": {
+                686: ("Ligue 1 McDonald's", "16"),
+                35248: ("French Under 19 National - Group D", "9001"),
+                34147: ("Serie BKT", "33"),
+                35041: ("Premier League 2 Division 2", "9002"),
+            },
+            "players_by_uid": players,
+            "stats_agg": {uid: make_stats(1200.0) for uid in players},
+            "managed_uid": "665",
+        }
+
+        pool_records, squad_records, _search_rows, club_catalog = build_moneyball._build_player_records(snapshot)
+        by_name = {r["name"]: r for r in pool_records["ST"]}
+
+        self.assertEqual(by_name["Toulouse First Team"]["club"], "Toulouse")
+        self.assertEqual(by_name["Toulouse First Team"]["club_uid"], "886")
+        self.assertEqual(by_name["Toulouse First Team"]["league"], "Ligue 1 McDonald's")
+        self.assertEqual(by_name["Toulouse First Team"]["club_rep"], 6768)
+
+        faty = by_name["Enzo Faty"]
+        self.assertEqual(faty["club"], "Toulouse 2")
+        self.assertEqual(faty["club_uid"], "886:t1")
+        self.assertEqual(faty["club_img_id"], "886")
+        self.assertEqual(faty["league"], "France (Reserves)")
+        self.assertEqual(faty["club_rep"], 0)
+
+        u19 = by_name["Toulouse U19 ST"]
+        self.assertEqual(u19["club"], "Toulouse U19")
+        self.assertEqual(u19["club_uid"], "886:t2")
+        self.assertEqual(u19["league"], "French Under 19 National - Group D")
+        self.assertEqual(u19["club_rep"], 0)
+
+        inter_b = by_name["Inter U23 ST"]
+        self.assertEqual(inter_b["club"], "Inter II")
+        self.assertEqual(inter_b["club_uid"], "1135:t1")
+        self.assertEqual(inter_b["league"], "Serie BKT")
+        self.assertEqual(inter_b["club_rep"], 0)
+
+        hull_u21 = by_name["Hull U21 ST"]
+        self.assertEqual(hull_u21["club"], "Hull City U21")
+        self.assertEqual(hull_u21["club_uid"], "665:t1")
+        self.assertEqual(hull_u21["league"], "Premier League 2 Division 2")
+        self.assertTrue(hull_u21["is_hull"])
+        self.assertEqual([r["name"] for r in squad_records], ["Hull U21 ST"])
+
+        self.assertEqual(club_catalog["886"]["club"], "Toulouse")
+        self.assertEqual(club_catalog["886:t1"]["club"], "Toulouse 2")
+        self.assertEqual(club_catalog["886:t1"]["league"], "France (Reserves)")
+
+    def test_resolve_leagues_from_tables_supports_mixed_slot_senior_leagues(self) -> None:
+        clubs = {
+            1: SimpleNamespace(uid=1, nation_id=150, gender=SimpleNamespace(raw=0)),
+            2: SimpleNamespace(uid=2, nation_id=150, gender=SimpleNamespace(raw=0)),
+            3: SimpleNamespace(uid=3, nation_id=150, gender=SimpleNamespace(raw=0)),
+            4: SimpleNamespace(uid=4, nation_id=150, gender=SimpleNamespace(raw=0)),
+        }
+        comps = {
+            33: SimpleNamespace(id=33, database_id=33),
+            99: SimpleNamespace(id=99, database_id=99),
+        }
+        serie_b = SimpleNamespace(
+            competition_id=33,
+            competition_name="Serie BKT",
+            club_count=4,
+            rows=[
+                SimpleNamespace(club_uid=1, team_id=101, team_slot=0, played=30, rounds_per_venue=19),
+                SimpleNamespace(club_uid=2, team_id=102, team_slot=0, played=30, rounds_per_venue=19),
+                SimpleNamespace(club_uid=3, team_id=103, team_slot=0, played=30, rounds_per_venue=19),
+                SimpleNamespace(club_uid=4, team_id=401, team_slot=1, played=30, rounds_per_venue=19),
+            ],
+        )
+        small_cup = SimpleNamespace(
+            competition_id=99,
+            competition_name="National League Cup",
+            club_count=4,
+            rows=[
+                SimpleNamespace(club_uid=1, team_id=101, team_slot=0, played=4, rounds_per_venue=None),
+                SimpleNamespace(club_uid=2, team_id=102, team_slot=0, played=4, rounds_per_venue=None),
+                SimpleNamespace(club_uid=3, team_id=301, team_slot=1, played=4, rounds_per_venue=None),
+                SimpleNamespace(club_uid=4, team_id=401, team_slot=1, played=4, rounds_per_venue=None),
+            ],
+        )
+
+        club_leagues, team_leagues = build_moneyball._resolve_leagues_from_tables([small_cup, serie_b], clubs, comps)
+        self.assertEqual(club_leagues[1], ("Serie BKT", "33"))
+        self.assertNotIn(4, club_leagues)
+        self.assertEqual(team_leagues[401], ("Serie BKT", "33"))
+        self.assertNotIn(301, team_leagues)
 
 
 class ServerUnitTests(unittest.TestCase):
