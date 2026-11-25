@@ -48,18 +48,22 @@ import {
   matchesSearch,
   persistLastViewSnapshot,
   readScalarFilters,
+  renameSelectedView,
   renderActiveFilterChips,
   renderAllPopovers,
   renderFacetOptions,
   renderSavedViewsSelect,
   resetAllFilters,
   saveCurrentView,
+  syncCustomBoundInputs,
+  updateSelectedView,
   wirePopoverBehaviors,
 } from "./modules/filters.js";
 import {
   populateScatterAxes,
   renderPlayerProgression,
   renderScatter,
+  resetScatterZoom,
   syncScatterPresetSelect,
 } from "./modules/charts.js";
 import {
@@ -431,6 +435,17 @@ function refreshView() {
   const { rows, baseline } = computePoolRows(dataset, readScalarFilters(), matchesPlayer);
   rows.sort((a, b) => b.active_score - a.active_score);
   state.filtered = rows;
+  if (state.selectedCompareUids.size > 0) {
+    const visibleUids = new Set(rows.map((r) => r.uid));
+    let changed = false;
+    for (const uid of [...state.selectedCompareUids]) {
+      if (!visibleUids.has(uid)) {
+        state.selectedCompareUids.delete(uid);
+        changed = true;
+      }
+    }
+    if (changed) updateCompareSelectedButton();
+  }
   state.squadLimit = SQUAD_PAGE_SIZE;
 
   const repNote = datasetHasClubReputation(dataset) ? `rep ≥ ${els.minRep.value}` : "rep n/a";
@@ -438,7 +453,9 @@ function refreshView() {
     ? `Dynamic percentiles vs ${baseline.peerCount.toLocaleString()} peers (mins ≥ ${els.minMins.value}, ${repNote})`
     : `Global ≥${dataset.baseline_minutes || 900}m percentiles`;
   const clubLabel = state.meta?.club_short_name || "Managed Club";
-  els.poolSummary.textContent = `${rows.length.toLocaleString()} targets matched · ${pctMode} · ${clubLabel} highlighted in amber`;
+  const hullCount = rows.reduce((acc, r) => acc + (r.is_hull ? 1 : 0), 0);
+  const clubBreakdown = hullCount > 0 && els.includeHull.checked ? ` (incl. ${hullCount} ${clubLabel})` : "";
+  els.poolSummary.textContent = `${rows.length.toLocaleString()} targets matched${clubBreakdown} · ${pctMode} · ${clubLabel} highlighted in amber`;
 
   renderAllPopovers(dataset);
   renderActiveFilterChips(dataset, refreshView);
@@ -449,7 +466,7 @@ function refreshView() {
   const eliteNote = Number.isFinite(state.lastScatterEliteCount)
     ? ` · ${state.lastScatterEliteCount.toLocaleString()} in Elite Quadrant`
     : "";
-  els.poolSummary.textContent = `${rows.length.toLocaleString()} targets matched${eliteNote} · ${pctMode} · ${clubLabel} highlighted in amber`;
+  els.poolSummary.textContent = `${rows.length.toLocaleString()} targets matched${clubBreakdown}${eliteNote} · ${pctMode} · ${clubLabel} highlighted in amber`;
   return initOrUpdateTable(dataset, rows, openDialog);
 }
 
@@ -506,15 +523,30 @@ function wireEvents() {
   }
   [
     els.minMins,
-    els.maxAge,
-    els.maxVal,
-    els.maxWage,
     els.contract,
     els.minRep,
     els.benchmark,
     els.dynamicPct,
     els.includeHull,
   ].forEach((el) => el.addEventListener("change", refreshView));
+
+  [els.maxAge, els.maxVal, els.maxWage].forEach((el) => {
+    el?.addEventListener("change", () => {
+      syncCustomBoundInputs();
+      if (el.value === "__custom__") {
+        const customMap = {
+          "f-max-age": els.maxAgeCustom,
+          "f-max-val": els.maxValCustom,
+          "f-max-wage": els.maxWageCustom,
+        };
+        customMap[el.id]?.focus();
+      }
+      refreshView();
+    });
+  });
+  [els.maxAgeCustom, els.maxValCustom, els.maxWageCustom].forEach((el) => {
+    el?.addEventListener("input", refreshView);
+  });
 
   els.role.addEventListener("change", () => {
     const dataset = activeDataset();
@@ -583,13 +615,22 @@ function wireEvents() {
   });
 
   els.btnSaveView?.addEventListener("click", () => saveCurrentView(showToast));
+  els.btnUpdateView?.addEventListener("click", () => updateSelectedView(showToast));
+  els.btnRenameView?.addEventListener("click", () => renameSelectedView(showToast));
 
   els.savedViewSelect?.addEventListener("change", async () => {
     const id = els.savedViewSelect.value;
-    if (els.btnDeleteView) els.btnDeleteView.disabled = !id;
-    if (!id) return;
+    const hasSel = Boolean(id);
+    if (els.btnDeleteView) els.btnDeleteView.disabled = !hasSel;
+    if (els.btnUpdateView) els.btnUpdateView.disabled = !hasSel;
+    if (els.btnRenameView) els.btnRenameView.disabled = !hasSel;
+    if (!id) {
+      if (els.viewNameInput) els.viewNameInput.value = "";
+      return;
+    }
     const view = (state.savedViews || []).find((v) => v.id === id);
     if (view) {
+      if (els.viewNameInput) els.viewNameInput.value = view.name;
       await applyViewSnapshot(view, selectPosition, refreshView);
       showToast(`Loaded view "${view.name}"`);
     }
@@ -627,6 +668,8 @@ function wireEvents() {
     await applyViewSnapshot(state.lastView, selectPosition, refreshView);
     showToast("Restored previous view");
   });
+
+  els.btnResetZoom?.addEventListener("click", resetScatterZoom);
 
   els.btnExportScatter.addEventListener("click", () => {
     if (!state.scatterChart) return;
@@ -714,6 +757,13 @@ function wireEvents() {
     });
   });
 
+  els.btnClearCompare?.addEventListener("click", () => {
+    if (!state.selectedCompareUids.size) return;
+    state.selectedCompareUids.clear();
+    updateCompareSelectedButton();
+    state.tabulatorTable?.getRows().forEach((r) => r.reformat());
+  });
+
   document.addEventListener("keydown", (ev) => {
     if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
     const target = ev.target;
@@ -728,10 +778,15 @@ function wireEvents() {
       }
       return;
     }
-    if (ev.key !== "/" || document.querySelector("dialog[open]") || inEditable) return;
-    ev.preventDefault();
-    els.search.focus();
-    els.search.select();
+    if (document.querySelector("dialog[open]") || inEditable) return;
+    if (ev.key === "/") {
+      ev.preventDefault();
+      els.search.focus();
+      els.search.select();
+    } else if (ev.key === "?") {
+      ev.preventDefault();
+      els.popShortcuts?.togglePopover?.();
+    }
   });
 
   enableLightDismissFallback(els.playerDialog);
@@ -763,6 +818,7 @@ function wireEvents() {
   els.playerDialog.addEventListener("close", () => {
     state.dialogOpenToken += 1;
     state.activeProfile = null;
+    state.activeComparePlayers = [];
     if (state.radarChart) {
       state.radarChart.dispose();
       state.radarChart = null;
@@ -843,7 +899,21 @@ function wireEvents() {
     } else {
       state.shortlistCompareUids.delete(uid);
     }
+    const firstUid = [...state.shortlistCompareUids][0];
+    const lockedPos = firstUid ? state.shortlist[firstUid]?.pos_group || "" : "";
+    els.shortlistBody.querySelectorAll(".shortlist-compare-cb").forEach((box) => {
+      const boxUid = box.dataset.uid;
+      const entry = boxUid ? state.shortlist[boxUid] : null;
+      const posMismatch = Boolean(lockedPos && !box.checked && entry?.pos_group !== lockedPos);
+      box.disabled = !entry?.pos_group || posMismatch;
+      box.title = posMismatch ? `Only ${lockedPos} players can be compared together` : "Select to compare";
+    });
     updateShortlistCompareButton();
+  });
+  els.btnShortlistClearCompare?.addEventListener("click", () => {
+    if (!state.shortlistCompareUids.size) return;
+    state.shortlistCompareUids.clear();
+    renderShortlist();
   });
   els.btnShortlistCompare?.addEventListener("click", async () => {
     const picked = [...state.shortlistCompareUids]
@@ -876,10 +946,20 @@ function wireEvents() {
   els.shortlistBody.addEventListener("input", (event) => {
     const noteInput = event.target.closest(".shortlist-note-input");
     if (!noteInput) return;
-    const uid = noteInput.closest("[data-uid]")?.dataset.uid;
+    const itemEl = noteInput.closest("[data-uid]");
+    const uid = itemEl?.dataset.uid;
     if (!uid || !state.shortlist[uid]) return;
     state.shortlist[uid].note = noteInput.value;
     saveShortlist();
+    state.tabulatorTable?.getRow(uid)?.reformat?.();
+    const savedBadge = itemEl.querySelector(".shortlist-note-saved");
+    if (savedBadge) {
+      savedBadge.hidden = false;
+      clearTimeout(savedBadge._timer);
+      savedBadge._timer = setTimeout(() => {
+        if (savedBadge.isConnected) savedBadge.hidden = true;
+      }, 1500);
+    }
   });
   els.shortlistBody.addEventListener("click", (event) => {
     const button = event.target.closest("button[data-action]");
@@ -965,7 +1045,7 @@ function wireEvents() {
       els.dialogCompareSelect.onchange();
       if (!els.progressionChart.hidden) {
         const { player, dataset: profileDataset, season } = state.activeProfile;
-        renderPlayerProgression(player, profileDataset.position, season, state.dialogOpenToken, loadPosition);
+        renderPlayerProgression(player, profileDataset.position, season, state.dialogOpenToken, loadPosition, state.activeComparePlayers || []);
       }
     }
     state.tabulatorTable?.redraw(true);
@@ -1066,6 +1146,8 @@ async function pollBuildUntilDone(initialStatus) {
 async function refreshFromSave(savePath = null, options = {}) {
   const background = Boolean(options?.background);
   els.btnRefreshSave.disabled = true;
+  if (els.saveSelect) els.saveSelect.disabled = true;
+  if (els.seasonSelect) els.seasonSelect.disabled = true;
   els.btnRefreshSave.classList.add("is-loading");
   const startedAt = Date.now();
   const updateRefreshLabel = () => {
@@ -1114,6 +1196,8 @@ async function refreshFromSave(savePath = null, options = {}) {
     if (els.refreshBanner) els.refreshBanner.hidden = true;
     els.btnRefreshSave.classList.remove("is-loading");
     els.btnRefreshSave.disabled = false;
+    if (els.saveSelect) els.saveSelect.disabled = false;
+    if (els.seasonSelect) els.seasonSelect.disabled = false;
     els.btnRefreshSave.textContent = els.btnRefreshSave.classList.contains("is-pending")
       ? "Refresh Save •"
       : "Refresh Save";

@@ -1,4 +1,4 @@
-import { DEFAULT_AXES, PROGRESSION_AXES, SCATTER_PRESETS, collator } from "./constants.js";
+import { DEFAULT_AXES, PROGRESSION_AXES, RADAR_MAX_AXES, SCATTER_PRESETS, collator } from "./constants.js";
 import { activeDataset, els, state } from "./state.js";
 import { getMetricCatalog, getPlayerMetricPct } from "./scoring.js";
 import {
@@ -64,6 +64,18 @@ export function populateScatterAxes(dataset, preserveAxes) {
   }
 }
 
+function syncResetZoomButton() {
+  if (!els.btnResetZoom) return;
+  els.btnResetZoom.classList.toggle("is-pending", Boolean(state.scatterZoomed));
+}
+
+export function resetScatterZoom() {
+  if (!state.scatterChart) return;
+  state.scatterZoomed = false;
+  syncResetZoomButton();
+  state.scatterChart.dispatchAction({ type: "restore" });
+}
+
 export function ensureScatterChart(onPlayerClick) {
   if (state.scatterChart || !window.echarts || !els.scatterChart) return;
   state.scatterChart = window.echarts.init(els.scatterChart, null, { renderer: "canvas" });
@@ -71,6 +83,18 @@ export function ensureScatterChart(onPlayerClick) {
     const player = params?.data?.player;
     const ds = activeDataset();
     if (player && ds && onPlayerClick) onPlayerClick(player, ds);
+  });
+  state.scatterChart.on("datazoom", (ev) => {
+    const batch = ev?.batch?.[0] || ev;
+    const isFull =
+      batch &&
+      (batch.startValue == null && batch.endValue == null && (batch.start === 0 || batch.start === undefined) && (batch.end === 100 || batch.end === undefined));
+    state.scatterZoomed = !isFull;
+    syncResetZoomButton();
+  });
+  state.scatterChart.on("restore", () => {
+    state.scatterZoomed = false;
+    syncResetZoomButton();
   });
   if ("ResizeObserver" in window) {
     state.scatterResizeObs = new ResizeObserver(() => {
@@ -134,7 +158,7 @@ export function renderScatter(dataset, onPlayerClick) {
       pt.itemStyle = isBench
         ? { borderColor: theme.text, borderWidth: 2.5 }
         : isShortlisted
-          ? { borderColor: "#16a34a", borderWidth: 2.5 }
+          ? { borderColor: theme.positive, borderWidth: 2.5 }
           : { borderColor: theme.surface, borderWidth: 1.5 };
       hull.push(pt);
     } else if (isShortlisted) {
@@ -146,6 +170,8 @@ export function renderScatter(dataset, onPlayerClick) {
   }
 
   const totalCount = others.length + hull.length + shortlisted.length;
+  state.scatterZoomed = false;
+  syncResetZoomButton();
   const avgX = totalCount ? sumX / totalCount : 0;
   const avgY = totalCount ? sumY / totalCount : 0;
   let eliteCount = 0;
@@ -205,7 +231,11 @@ export function renderScatter(dataset, onPlayerClick) {
         label: {
           show: true,
           position: elitePos,
+          distance: 6,
           color: theme.accent,
+          backgroundColor: theme.surface,
+          borderRadius: 4,
+          padding: [2, 6],
           fontSize: 10,
           fontWeight: 700,
         },
@@ -217,8 +247,25 @@ export function renderScatter(dataset, onPlayerClick) {
   const clubLabel = state.meta?.club_short_name || "Managed Club";
 
   const poolOpacity = others.length > 1500 ? 0.58 : others.length > 500 ? 0.72 : 0.88;
+  const emptyGraphic = !totalCount
+    ? [
+        {
+          type: "text",
+          left: "center",
+          top: "middle",
+          style: {
+            text: state.filtered.length
+              ? "No metric values available for current axes"
+              : "No matching players to plot — adjust filters above",
+            fill: theme.muted,
+            font: "600 13px -apple-system, BlinkMacSystemFont, sans-serif",
+          },
+        },
+      ]
+    : [];
   const option = {
     animationDuration: 220,
+    graphic: emptyGraphic,
     grid: { left: 60, right: 28, top: 44, bottom: 48 },
     legend: {
       top: 8,
@@ -269,7 +316,7 @@ export function renderScatter(dataset, onPlayerClick) {
               ${escapeHtml(yMeta.label)}: <strong>${formatStat(yKey, p[yKey])}</strong>
             </div>
             <div>Value: ${escapeHtml(formatPlayerValue(p))} · Score: <strong>${Number(p.active_score ?? 0).toFixed(1)}</strong>${
-              params?.data?.isShortlisted ? ' · <strong style="color:#16a34a">★ Shortlisted</strong>' : ""
+              params?.data?.isShortlisted ? ` · <strong style="color:${theme.positive}">★ Shortlisted</strong>` : ""
             }</div>
           </div>
         `;
@@ -339,7 +386,7 @@ export function renderScatter(dataset, onPlayerClick) {
         emphasis: { scale: 1.35 },
         symbol: "triangle",
         symbolSize: 11,
-        itemStyle: { color: "#16a34a", opacity: 1 },
+        itemStyle: { color: theme.positive, opacity: 1 },
         z: 5,
         data: shortlisted,
         markLine: markOwnerIdx === 2 ? markLine : undefined,
@@ -366,7 +413,23 @@ export function getProfileDisplayMetrics(dataset) {
   return base;
 }
 
-export function renderRadar(player, comparePlayer, dataset, baseline, clubLabel) {
+export function getRadarMetrics(dataset) {
+  const all = getProfileDisplayMetrics(dataset);
+  if (all.length <= RADAR_MAX_AXES) {
+    return { metrics: all, totalCount: all.length, truncated: false };
+  }
+  const baseKeys = new Set((dataset.metrics || []).map((m) => m.key));
+  const cfg = dataset.position === state.pos ? state.scoreConfig : null;
+  const weightMap = new Map((cfg?.metrics || []).filter((m) => m.enabled).map((m) => [m.key, m.weight]));
+  const extras = all
+    .filter((m) => !baseKeys.has(m.key))
+    .sort((a, b) => (weightMap.get(b.key) ?? 0) - (weightMap.get(a.key) ?? 0));
+  const base = all.filter((m) => baseKeys.has(m.key));
+  const combined = [...base, ...extras].slice(0, RADAR_MAX_AXES);
+  return { metrics: combined, totalCount: all.length, truncated: true };
+}
+
+export function renderRadar(player, compareInput, dataset, baseline, clubLabelOrFn) {
   if (!window.echarts || !els.radarChart) return;
   if (!state.radarChart) {
     state.radarChart = window.echarts.init(els.radarChart, null, { renderer: "canvas" });
@@ -374,36 +437,67 @@ export function renderRadar(player, comparePlayer, dataset, baseline, clubLabel)
   state.radarChart.resize();
 
   const theme = getThemeColors();
-  const metrics = getProfileDisplayMetrics(dataset);
+  const { metrics, totalCount, truncated } = getRadarMetrics(dataset);
+  if (els.dialogRadarNote) {
+    if (truncated) {
+      els.dialogRadarNote.textContent = `Radar shows ${metrics.length} of ${totalCount} active metrics. See all metrics below.`;
+      els.dialogRadarNote.hidden = false;
+    } else {
+      els.dialogRadarNote.hidden = true;
+    }
+  }
+
   const indicators = metrics.map((m) => ({
     name: m.label.replace(" / 90", ""),
     min: 0,
     max: 100,
   }));
 
-  const playerValues = metrics.map((m) => getPlayerMetricPct(player, m.key, dataset, baseline));
-  const seriesData = [
-    {
-      value: playerValues,
-      name: playerName(player),
-      symbol: "circle",
-      areaStyle: { color: theme.accent, opacity: 0.28 },
-      lineStyle: { color: theme.accent, width: 2.5 },
-      itemStyle: { color: theme.accent },
-    },
-  ];
+  const compareList = Array.isArray(compareInput)
+    ? compareInput.filter(Boolean).slice(0, 3)
+    : compareInput
+      ? [compareInput]
+      : [];
+  const labelForCmp = (cmp) => {
+    if (typeof clubLabelOrFn === "function") return clubLabelOrFn(cmp);
+    return clubLabelOrFn || clubNameOf(cmp);
+  };
 
-  if (comparePlayer) {
-    const cmpValues = metrics.map((m) => getPlayerMetricPct(comparePlayer, m.key, dataset, baseline));
-    seriesData.push({
-      value: cmpValues,
-      name: `${playerName(comparePlayer)} (${clubLabel})`,
-      symbol: "diamond",
-      areaStyle: { color: theme.compare, opacity: 0.2 },
-      lineStyle: { color: theme.compare, width: 2.5, type: "dashed" },
-      itemStyle: { color: theme.compare },
-    });
-  }
+  const toSeriesEntry = (p, name, color, symbol, lineType, areaOpacity) => {
+    const pcts = metrics.map((m) => getPlayerMetricPct(p, m.key, dataset, baseline));
+    return {
+      value: pcts.map((v) => (v === null || v === undefined ? 0 : v)),
+      pcts,
+      player: p,
+      name,
+      symbol,
+      areaStyle: { color, opacity: areaOpacity },
+      lineStyle: { color, width: 2.3, type: lineType },
+      itemStyle: { color },
+    };
+  };
+
+  const seriesData = [
+    toSeriesEntry(player, playerName(player), theme.accent, "circle", "solid", 0.28),
+  ];
+  const cmpPalette = [
+    { color: theme.compare, symbol: "diamond", lineType: "dashed", opacity: 0.2 },
+    { color: theme.compare2, symbol: "triangle", lineType: "dotted", opacity: 0.14 },
+    { color: theme.compare3, symbol: "rect", lineType: "dashDot", opacity: 0.14 },
+  ];
+  compareList.forEach((cmp, idx) => {
+    const sty = cmpPalette[idx] || cmpPalette[0];
+    seriesData.push(
+      toSeriesEntry(
+        cmp,
+        `${playerName(cmp)} (${labelForCmp(cmp)})`,
+        sty.color,
+        sty.symbol,
+        sty.lineType,
+        sty.opacity
+      )
+    );
+  });
 
   state.radarChart.setOption(
     {
@@ -414,6 +508,17 @@ export function renderRadar(player, comparePlayer, dataset, baseline, clubLabel)
         backgroundColor: theme.surface,
         borderColor: theme.border,
         textStyle: { color: theme.text, fontSize: 12 },
+        formatter: (params) => {
+          const entry = params?.data;
+          if (!entry?.player) return "";
+          const lines = metrics.map((m, i) => {
+            const raw = formatStat(m.key, entry.player[m.key]);
+            const pct = entry.pcts?.[i];
+            const pctStr = pct === null || pct === undefined ? "n/a" : `${pct}th`;
+            return `<div style="display:flex;justify-content:space-between;gap:12px"><span>${escapeHtml(m.label)}</span><strong>${escapeHtml(raw)} <span style="opacity:.75">(${pctStr})</span></strong></div>`;
+          });
+          return `<div style="min-width:210px"><strong>${escapeHtml(entry.name)}</strong><div style="margin-top:4px;font-size:11px">${lines.join("")}</div></div>`;
+        },
       },
       legend: {
         bottom: 4,
@@ -441,7 +546,7 @@ export function renderRadar(player, comparePlayer, dataset, baseline, clubLabel)
   );
 }
 
-export async function renderPlayerProgression(player, position, season, openToken, loadPositionFn) {
+export async function renderPlayerProgression(player, position, season, openToken, loadPositionFn, comparePlayers = []) {
   if (state.seasons.length < 2) {
     els.progressionChart.hidden = true;
     els.dialogProgressionEmpty.hidden = false;
@@ -454,11 +559,17 @@ export async function renderPlayerProgression(player, position, season, openToke
   els.dialogProgressionEmpty.textContent = "Loading past seasons...";
 
   const history = [];
+  const primaryCmp = Array.isArray(comparePlayers) ? comparePlayers[0] || null : comparePlayers;
+  const cmpHistory = new Map();
   for (const entry of state.seasons) {
     try {
       const ds = await loadPositionFn(position, entry.season);
       const match = ds.players.find((p) => p.uid === player.uid);
       if (match) history.push({ season: entry.season, row: match });
+      if (primaryCmp) {
+        const cmpMatch = ds.players.find((p) => p.uid === primaryCmp.uid);
+        if (cmpMatch) cmpHistory.set(entry.season, cmpMatch);
+      }
     } catch {
       // Skip unavailable season
     }
@@ -498,7 +609,7 @@ export async function renderPlayerProgression(player, position, season, openToke
     els.dialogProgressionMetric.value = prevMetric && catalog.byKey.has(prevMetric) ? prevMetric : "";
     els.dialogProgressionMetric.hidden = false;
     els.dialogProgressionMetric.onchange = () => {
-      renderPlayerProgression(player, position, season, openToken, loadPositionFn);
+      renderPlayerProgression(player, position, season, openToken, loadPositionFn, state.activeComparePlayers || []);
     };
   }
 
@@ -517,7 +628,13 @@ export async function renderPlayerProgression(player, position, season, openToke
   const m1Label = catalog?.byKey.get(m1Key)?.label || fallbackLabels[m1Key] || m1Key;
   const m2Label = m2Key ? catalog?.byKey.get(m2Key)?.label || fallbackLabels[m2Key] || m2Key : "";
 
+  const activeSlug = state.scoreConfig?.pos === position ? state.scoreConfig.roleSlug : "overall";
+  const roleInfo = activeSlug && activeSlug !== "overall" ? dsForPos?.roles?.[activeSlug] : null;
+  const scoreField = roleInfo ? `score_${activeSlug}` : "score_overall";
+  const scoreLabel = roleInfo ? `${roleInfo.label} Score` : "Overall Score";
+
   const xLabels = history.map((h) => h.season);
+  const showCmpSeries = Boolean(primaryCmp && cmpHistory.size >= 1);
 
   state.progressionChart.setOption(
     {
@@ -539,11 +656,15 @@ export async function renderPlayerProgression(player, position, season, openToke
           const item = history[idx];
           const r = item.row;
           const secondPart = m2Key ? ` · ${escapeHtml(m2Label)}: ${formatStat(m2Key, r[m2Key])}` : "";
+          const cmpRow = cmpHistory.get(item.season);
+          const cmpPart = cmpRow
+            ? `<br><span style="color:${theme.compare}">vs ${escapeHtml(playerName(primaryCmp))}: ${formatStat(m1Key, cmpRow[m1Key])}</span>`
+            : "";
           return `
             <strong>${escapeHtml(item.season)}</strong> (${escapeHtml(clubNameOf(r))})<br>
             Mins: ${r.minutes} · Avg Rating: <strong>${Number(r.avg_rating || 0).toFixed(2)}</strong><br>
             ${escapeHtml(m1Label)}: ${formatStat(m1Key, r[m1Key])}${secondPart}<br>
-            Overall Score: <strong>${Number(r.score_overall || 0).toFixed(1)}</strong>
+            ${escapeHtml(scoreLabel)}: <strong>${Number(r[scoreField] ?? r.score_overall ?? 0).toFixed(1)}</strong>${cmpPart}
           `;
         },
       },
@@ -594,15 +715,32 @@ export async function renderPlayerProgression(player, position, season, openToke
               },
             ]
           : []),
+        ...(showCmpSeries
+          ? [
+              {
+                name: `${playerName(primaryCmp)} (${m1Label})`,
+                type: "line",
+                yAxisIndex: 0,
+                smooth: true,
+                symbolSize: 6,
+                lineStyle: { type: "dotted" },
+                itemStyle: { color: theme.compare2 },
+                data: history.map((h) => {
+                  const cr = cmpHistory.get(h.season);
+                  return cr && cr[m1Key] != null ? Number(cr[m1Key]) : null;
+                }),
+              },
+            ]
+          : []),
         {
-          name: "Overall Score",
+          name: scoreLabel,
           type: "line",
           yAxisIndex: 1,
           smooth: true,
           symbolSize: 7,
           lineStyle: { type: "dashed" },
-          itemStyle: { color: "#16a34a" },
-          data: history.map((h) => Number(h.row.score_overall) || 0),
+          itemStyle: { color: theme.positive },
+          data: history.map((h) => Number(h.row[scoreField] ?? h.row.score_overall) || 0),
         },
       ],
     },

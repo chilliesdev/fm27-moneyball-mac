@@ -71,6 +71,7 @@ export const FOOT_OPTIONS = ["Left", "Right", "Both"];
 export const STATUS_OPTIONS = ["Expiring Soon", "On Loan", "Not On Loan", "Free Agent"];
 export const CLUB_PAGE_SIZE = 250;
 export const SQUAD_PAGE_SIZE = 24;
+export const RADAR_MAX_AXES = 12;
 
 export const MIN_FILTERS = [
   { id: "minAge", label: "Min Age", field: "age", prefix: "", suffix: "" },

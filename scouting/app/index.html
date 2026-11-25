@@ -41,9 +41,29 @@
       <button type="button" id="btn-shortlist-view" class="btn secondary">
         Shortlist (<span id="shortlist-count">0</span>)
       </button>
+      <button type="button" id="btn-shortcuts-help" class="btn secondary btn-compact" popovertarget="pop-shortcuts" aria-expanded="false" aria-controls="pop-shortcuts" title="Keyboard shortcuts (?)">?</button>
+      <div id="pop-shortcuts" popover="auto" class="filter-popover shortcuts-popover" data-anchor="btn-shortcuts-help" aria-label="Keyboard shortcuts">
+        <div class="popover-actions">
+          <span class="popover-hint">Keyboard Shortcuts</span>
+          <button type="button" class="btn-link" popovertarget="pop-shortcuts" popovertargetaction="hide">Close</button>
+        </div>
+        <dl class="shortcuts-list">
+          <div><dt><kbd>/</kbd></dt><dd>Focus search box</dd></div>
+          <div><dt><kbd>?</kbd></dt><dd>Open shortcuts help</dd></div>
+          <div><dt><kbd>←</kbd> / <kbd>→</kbd></dt><dd>Prev / Next player in profile</dd></div>
+          <div><dt><kbd>Shift</kbd> + Click</dt><dd>Multi-column table sort</dd></div>
+          <div><dt><kbd>Esc</kbd></dt><dd>Close active popover or dialog</dd></div>
+        </dl>
+      </div>
       <button type="button" id="btn-theme-toggle" class="btn secondary btn-compact theme-toggle" title="Toggle light/dark theme">
-        <span class="theme-opt theme-to-dark"><span aria-hidden="true">🌙</span><span class="sr-only">Switch to dark theme</span></span>
-        <span class="theme-opt theme-to-light"><span aria-hidden="true">☀️</span><span class="sr-only">Switch to light theme</span></span>
+        <span class="theme-opt theme-to-dark">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+          <span class="sr-only">Switch to dark theme</span>
+        </span>
+        <span class="theme-opt theme-to-light">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32 1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+          <span class="sr-only">Switch to light theme</span>
+        </span>
       </button>
     </div>
   </header>
@@ -90,7 +110,7 @@
           </button>
           <div id="pop-saved-views" popover="auto" class="filter-popover saved-views-popover" data-anchor="btn-views-menu">
             <div class="popover-actions">
-              <span class="popover-hint">Save or delete view</span>
+              <span class="popover-hint">Manage saved views</span>
               <button type="button" class="btn-link" popovertarget="pop-saved-views" popovertargetaction="hide">Close</button>
             </div>
             <div class="saved-views-body">
@@ -99,8 +119,10 @@
                 <input type="text" id="f-view-name" class="view-name-input" placeholder="View name (optional)" aria-label="Custom view name">
               </label>
               <div class="saved-views-btns">
-                <button type="button" id="btn-save-view" class="btn primary btn-compact" title="Save current filters and axes as a view">Save View</button>
-                <button type="button" id="btn-delete-view" class="btn secondary btn-compact" title="Delete selected view" disabled>Delete Selected</button>
+                <button type="button" id="btn-save-view" class="btn primary btn-compact" title="Save current filters and axes as a new view">Save New</button>
+                <button type="button" id="btn-update-view" class="btn secondary btn-compact" title="Overwrite selected view with current filters and axes" disabled>Update</button>
+                <button type="button" id="btn-rename-view" class="btn secondary btn-compact" title="Rename selected view" disabled>Rename</button>
+                <button type="button" id="btn-delete-view" class="btn secondary btn-compact" title="Delete selected view" disabled>Delete</button>
               </div>
             </div>
           </div>
@@ -128,7 +150,7 @@
 
         <label class="field checkbox-field" title="Keep managed club players (300+ mins) visible regardless of age, value, wage, contract, or reputation filters">
           <input type="checkbox" id="f-include-hull" checked>
-          <span>Include managed club</span>
+          <span>Include managed club <small class="checkbox-hint">(300+m)</small></span>
         </label>
       </div>
 
@@ -152,6 +174,7 @@
           <div id="pop-leagues" popover="auto" class="filter-popover" data-facet="leagues" data-anchor="btn-f-leagues">
             <div class="popover-search-wrap">
               <input type="search" class="popover-search" placeholder="Search leagues..." aria-label="Search leagues">
+              <button type="button" class="search-clear-btn popover-search-clear" aria-label="Clear search" hidden>×</button>
             </div>
             <div class="popover-actions">
               <span class="popover-hint">Matching players</span>
@@ -173,6 +196,7 @@
           <div id="pop-clubs" popover="auto" class="filter-popover" data-facet="clubs" data-anchor="btn-f-clubs">
             <div class="popover-search-wrap">
               <input type="search" class="popover-search" placeholder="Search clubs..." aria-label="Search clubs">
+              <button type="button" class="search-clear-btn popover-search-clear" aria-label="Clear search" hidden>×</button>
             </div>
             <div class="popover-actions">
               <span class="popover-hint" id="clubs-scope-hint">All leagues</span>
@@ -216,6 +240,7 @@
           <div id="pop-nations" popover="auto" class="filter-popover" data-facet="nations" data-anchor="btn-f-nations">
             <div class="popover-search-wrap">
               <input type="search" class="popover-search" placeholder="Search nationalities..." aria-label="Search nationalities">
+              <button type="button" class="search-clear-btn popover-search-clear" aria-label="Clear search" hidden>×</button>
             </div>
             <div class="popover-actions">
               <span class="popover-hint">Multi-select</span>
@@ -298,7 +323,9 @@
             <option value="29">&le; 29</option>
             <option value="30">&le; 30</option>
             <option value="32">&le; 32</option>
+            <option value="__custom__">Custom&hellip;</option>
           </select>
+          <input type="number" id="f-max-age-custom" class="custom-bound-input" min="14" max="60" step="1" placeholder="Custom max age" aria-label="Custom max age" hidden>
         </label>
 
         <label class="field">
@@ -324,7 +351,9 @@
             <option value="75000000">&le; 75M</option>
             <option value="100000000">&le; 100M</option>
             <option value="150000000">&le; 150M</option>
+            <option value="__custom__">Custom&hellip;</option>
           </select>
+          <input type="number" id="f-max-val-custom" class="custom-bound-input" min="0" step="100000" placeholder="Custom max value (£)" aria-label="Custom max transfer value" hidden>
         </label>
 
         <label class="field">
@@ -349,7 +378,9 @@
             <option value="150000">&le; 150k/wk</option>
             <option value="250000">&le; 250k/wk</option>
             <option value="500000">&le; 500k/wk</option>
+            <option value="__custom__">Custom&hellip;</option>
           </select>
+          <input type="number" id="f-max-wage-custom" class="custom-bound-input" min="0" step="500" placeholder="Custom max wage (£/wk)" aria-label="Custom max weekly wage" hidden>
         </label>
 
         <label class="field">
@@ -410,7 +441,7 @@
           <div>
             <h2>Per-90 Scatter Plot</h2>
             <p class="scatter-note" id="pool-summary">Loading dataset...</p>
-            <p class="scatter-hint subtitle">Click dot for profile · Click legend to toggle series · Ctrl + scroll or Box Zoom to zoom</p>
+            <p class="scatter-hint subtitle">Click dot for profile · Click legend to toggle series · Box Zoom or Ctrl + scroll to zoom</p>
           </div>
         </div>
         <div class="scatter-controls">
@@ -427,6 +458,7 @@
             <span>Y Axis</span>
             <select id="scatter-y"></select>
           </label>
+          <button type="button" id="btn-reset-zoom" class="btn secondary btn-compact" title="Reset scatter plot zoom">Reset Zoom</button>
           <button type="button" id="btn-export-scatter" class="btn secondary btn-compact">Export PNG</button>
         </div>
       </div>
@@ -443,9 +475,10 @@
         </div>
         <div class="table-toolbar-actions">
           <button type="button" id="btn-compare-selected" class="btn secondary btn-compact" hidden>Compare (<span id="compare-selected-count">0</span>)</button>
+          <button type="button" id="btn-clear-compare" class="btn secondary btn-compact" hidden title="Clear comparison selection">Clear</button>
           <button type="button" id="btn-toggle-pcts" class="btn secondary btn-compact" aria-pressed="false" title="Toggle percentile badges in metric cells">Hide %</button>
           <button type="button" id="btn-expand-table" class="btn secondary btn-compact" aria-pressed="false" title="Expand table height to reduce nested scrolling">Expand Table</button>
-          <button type="button" id="btn-column-chooser" class="btn secondary btn-compact" popovertarget="column-chooser-popover" aria-haspopup="true" aria-expanded="false" aria-controls="column-chooser-popover">Columns</button>
+          <button type="button" id="btn-column-chooser" class="btn secondary btn-compact" popovertarget="column-chooser-popover" aria-haspopup="true" aria-expanded="false" aria-controls="column-chooser-popover">Columns <span id="col-chooser-count" class="trigger-badge" hidden></span></button>
           <div id="column-chooser-popover" class="filter-popover column-chooser-popover" popover="auto" data-anchor="btn-column-chooser" aria-label="Choose table columns"></div>
           <button type="button" id="btn-export-csv" class="btn primary btn-compact">Export Filtered CSV</button>
         </div>
@@ -505,6 +538,7 @@
         </div>
         <div class="dialog-col-right">
           <div id="dialog-radar-panel" class="radar-panel">
+            <div id="dialog-pin-banner" class="dialog-pin-banner" hidden></div>
             <div class="radar-controls">
               <label>
                 <span>Compare Player</span>
@@ -513,9 +547,12 @@
               <label class="radar-compare-search-field">
                 <span>Find Any Player</span>
                 <input type="search" id="dialog-compare-search" placeholder="Search player in position..." autocomplete="off">
+                <span id="dialog-compare-search-status" class="subtitle compare-search-status" hidden></span>
               </label>
             </div>
+            <div id="dialog-compare-chips" class="compare-chips" aria-label="Compared players" hidden></div>
             <div id="radar-chart" class="radar-chart" role="img" aria-label="Player percentile radar chart"></div>
+            <p id="dialog-radar-note" class="subtitle radar-note" hidden></p>
           </div>
           <div id="dialog-profile-metrics" class="profile-metrics">
             <div class="profile-metrics-head">
@@ -537,7 +574,7 @@
     </div>
   </dialog>
 
-  <dialog id="score-dialog" closedby="any" aria-labelledby="score-dialog-title">
+  <dialog id="score-dialog" closedby="closerequest" aria-labelledby="score-dialog-title">
     <div class="dialog-shell score-dialog-shell">
       <header class="dialog-head">
         <div>
@@ -549,8 +586,8 @@
         </div>
         <div class="dialog-head-actions">
           <button type="button" id="score-reset-btn" class="btn secondary">Reset to Role</button>
-          <button type="button" id="score-cancel-btn" class="btn secondary">Cancel</button>
-          <button type="button" id="score-close-btn" class="btn primary">Done</button>
+          <button type="button" id="score-cancel-btn" class="btn secondary" title="Discard changes and close">Cancel</button>
+          <button type="button" id="score-close-btn" class="btn primary">Apply &amp; Done</button>
         </div>
       </header>
 
@@ -586,7 +623,7 @@
       <div class="score-dialog-body">
         <div class="score-builder-panel">
           <div class="score-builder-toolbar">
-            <input type="search" id="score-metric-search" placeholder="Search 68+ metrics..." aria-label="Search metrics">
+            <input type="search" id="score-metric-search" placeholder="Search metrics..." aria-label="Search metrics">
             <select id="score-category-filter" aria-label="Filter metric category"></select>
             <label class="checkbox-field score-enabled-toggle">
               <input type="checkbox" id="score-enabled-only">
@@ -617,6 +654,7 @@
         <h2 id="shortlist-dialog-title">Saved Shortlist</h2>
         <div class="dialog-head-actions">
           <button type="button" id="btn-shortlist-compare" class="btn secondary" hidden>Compare Selected (0)</button>
+          <button type="button" id="btn-shortlist-clear-compare" class="btn secondary" hidden>Clear Selection</button>
           <button type="button" id="btn-export-shortlist" class="btn primary">Export Shortlist CSV</button>
           <button type="button" id="btn-clear-shortlist" class="btn secondary">Clear Shortlist</button>
           <button type="button" id="shortlist-close-btn" class="btn secondary">Close</button>
@@ -643,6 +681,7 @@
             </select>
           </label>
         </div>
+        <p id="shortlist-compare-hint" class="subtitle" hidden></p>
         <div class="shortlist-items" id="shortlist-body"></div>
       </div>
     </div>

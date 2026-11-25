@@ -12,6 +12,7 @@ import {
   clubNameOf,
   enableLightDismissFallback,
   escapeHtml,
+  pctClass,
   playerName,
   showToast,
 } from "./utils.js";
@@ -27,6 +28,9 @@ export function renderScoreDialog() {
   els.scoreMethodHint.textContent = METHOD_HINTS[method] || "";
   els.scorePresetPos.textContent = dataset.position;
   els.scoreDialogSubtitle.textContent = `${POS_LABELS[dataset.position]} · ${catalog.list.length} metrics available`;
+  if (els.scoreMetricSearch) {
+    els.scoreMetricSearch.placeholder = `Search ${catalog.list.length} metrics...`;
+  }
 
   const presets = getPosPresets(dataset.position);
   els.scorePresetSelect.innerHTML = [
@@ -148,15 +152,18 @@ export function renderScorePreview(dataset) {
 
   els.scorePreviewList.innerHTML = sorted
     .map(
-      (p, idx) => `
+      (p, idx) => {
+        const sc = Number(p.active_score ?? 0);
+        return `
       <button type="button" class="score-preview-item" data-uid="${escapeHtml(p.uid)}" title="Inspect ${escapeHtml(playerName(p))}">
         <div class="score-preview-meta">
           <div class="score-preview-name">#${idx + 1} ${escapeHtml(playerName(p))}</div>
           <div class="score-preview-sub">${escapeHtml(clubNameOf(p))} · Age ${p.age ?? "?"} · ${p.minutes}m</div>
         </div>
-        <span class="pct-pill pct-elite">${Number(p.active_score ?? 0).toFixed(1)}</span>
+        <span class="pct-pill ${pctClass(Math.round(sc))}">${sc.toFixed(1)}</span>
       </button>
-    `
+    `;
+      }
     )
     .join("");
 }

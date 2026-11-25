@@ -149,14 +149,14 @@ export function getMetricDist(dataset, baseline, key) {
 }
 
 export function scoreMetric(val, method, higher, dist, fallbackPct, defaultHigher) {
-  if (val === null || val === undefined || val === "") return 50;
+  if (val === null || val === undefined || val === "") return null;
   const x = Number(val);
-  if (!Number.isFinite(x)) return 50;
+  if (!Number.isFinite(x)) return null;
   if (!dist || dist.n === 0) {
     if (fallbackPct !== null && fallbackPct !== undefined) {
       return higher === defaultHigher ? fallbackPct : 100 - fallbackPct;
     }
-    return 50;
+    return null;
   }
   if (method === "zscore") {
     if (dist.std === 0 || !Number.isFinite(dist.std)) return 50;
@@ -178,7 +178,7 @@ export function scoreMetric(val, method, higher, dist, fallbackPct, defaultHighe
 }
 
 export function getPlayerMetricPct(player, key, dataset, baseline) {
-  if (player?.active_pcts && player.active_pcts[key] !== undefined) {
+  if (player?.active_pcts && Object.prototype.hasOwnProperty.call(player.active_pcts, key)) {
     return player.active_pcts[key];
   }
   const catalog = getMetricCatalog(dataset);
@@ -188,9 +188,8 @@ export function getPlayerMetricPct(player, key, dataset, baseline) {
   const higher = cfgItem ? cfgItem.higher_is_better : (meta?.higher_is_better ?? true);
   const method = config?.method || "percentile";
   const dist = getMetricDist(dataset, baseline, key);
-  return Math.round(
-    scoreMetric(player?.[key], method, higher, dist, player?.[`pct_${key}`], meta?.higher_is_better ?? true)
-  );
+  const raw = scoreMetric(player?.[key], method, higher, dist, player?.[`pct_${key}`], meta?.higher_is_better ?? true);
+  return raw === null ? null : Math.round(raw);
 }
 
 export function getPosPresets(pos) {
@@ -308,17 +307,27 @@ export function computePoolRows(dataset, scalar, matchesFn) {
       const defaultHigher = catMeta?.higher_is_better ?? true;
       const higher = cfgByKey.get(k)?.higher_is_better ?? defaultHigher;
       const raw = scoreMetric(p[k], method, higher, dists.get(k), p[`pct_${k}`], defaultHigher);
-      rawScores.set(k, raw);
-      activePcts[k] = Math.round(raw);
+      if (raw !== null) {
+        rawScores.set(k, raw);
+        activePcts[k] = Math.round(raw);
+      } else {
+        activePcts[k] = null;
+      }
     }
 
     let activeScore = 0;
     if (totalWeight > 0) {
       let weightedSum = 0;
+      let usedWeight = 0;
       for (const item of enabledItems) {
-        weightedSum += (rawScores.get(item.key) ?? 50) * item.weight;
+        const rawVal = rawScores.get(item.key);
+        if (rawVal === undefined || rawVal === null) continue;
+        weightedSum += rawVal * item.weight;
+        usedWeight += item.weight;
       }
-      activeScore = Math.round((weightedSum / totalWeight) * 10) / 10;
+      if (usedWeight > 0) {
+        activeScore = Math.round((weightedSum / usedWeight) * 10) / 10;
+      }
     }
 
     out.push({

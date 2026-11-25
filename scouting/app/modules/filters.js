@@ -32,6 +32,28 @@ export function playerHasStatus(p, status) {
   return false;
 }
 
+function readBoundValue(selectEl, customEl, fallback) {
+  if (!selectEl) return fallback;
+  if (selectEl.value === "__custom__") {
+    const val = customEl && customEl.value !== "" ? customEl.valueAsNumber : NaN;
+    return Number.isFinite(val) && val >= 0 ? val : fallback;
+  }
+  const num = Number(selectEl.value);
+  return Number.isFinite(num) ? num : fallback;
+}
+
+export function syncCustomBoundInputs() {
+  const pairs = [
+    [els.maxAge, els.maxAgeCustom],
+    [els.maxVal, els.maxValCustom],
+    [els.maxWage, els.maxWageCustom],
+  ];
+  for (const [sel, inp] of pairs) {
+    if (!sel || !inp) continue;
+    inp.hidden = sel.value !== "__custom__";
+  }
+}
+
 export function readScalarFilters() {
   return {
     minimums: MIN_FILTERS.flatMap((filter) => {
@@ -45,9 +67,9 @@ export function readScalarFilters() {
     minMins: Number(els.minMins.value),
     minRep: Number(els.minRep.value),
     hasRep: datasetHasClubReputation(activeDataset()),
-    maxAge: Number(els.maxAge.value),
-    maxVal: Number(els.maxVal.value),
-    maxWage: Number(els.maxWage.value),
+    maxAge: readBoundValue(els.maxAge, els.maxAgeCustom, 99),
+    maxVal: readBoundValue(els.maxVal, els.maxValCustom, 999999999),
+    maxWage: readBoundValue(els.maxWage, els.maxWageCustom, 999999999),
     contractFilter: els.contract.value || "all",
     search: normalizeSearchText(els.search.value),
     dynamicPct: els.dynamicPct.checked,
@@ -338,17 +360,17 @@ export function renderAllPopovers(dataset) {
 export function getFilterRangeConflicts() {
   const conflicts = [];
   const minAge = els.minAge.value === "" ? NaN : els.minAge.valueAsNumber;
-  const maxAge = Number(els.maxAge.value);
+  const maxAge = readBoundValue(els.maxAge, els.maxAgeCustom, 99);
   if (Number.isFinite(minAge) && maxAge < 99 && minAge > maxAge) {
     conflicts.push(`Min Age (${minAge}) > Max Age (${maxAge})`);
   }
   const minVal = els.minVal.value === "" ? NaN : Number(els.minVal.value);
-  const maxVal = Number(els.maxVal.value);
+  const maxVal = readBoundValue(els.maxVal, els.maxValCustom, 999999999);
   if (Number.isFinite(minVal) && maxVal < 999999999 && minVal > maxVal) {
     conflicts.push(`Min Value (${formatMoney(minVal)}) > Max Value (${formatMoney(maxVal)})`);
   }
   const minWage = els.minWage.value === "" ? NaN : Number(els.minWage.value);
-  const maxWage = Number(els.maxWage.value);
+  const maxWage = readBoundValue(els.maxWage, els.maxWageCustom, 999999999);
   if (Number.isFinite(minWage) && maxWage < 999999999 && minWage > maxWage) {
     conflicts.push(`Min Wage (${formatMoney(minWage)}/wk) > Max Wage (${formatMoney(maxWage)}/wk)`);
   }
@@ -357,10 +379,13 @@ export function getFilterRangeConflicts() {
 
 export function describeActiveDefaultCaps() {
   const caps = [];
+  const maxAge = readBoundValue(els.maxAge, els.maxAgeCustom, 99);
+  const maxVal = readBoundValue(els.maxVal, els.maxValCustom, 999999999);
+  const maxWage = readBoundValue(els.maxWage, els.maxWageCustom, 999999999);
   if (els.minMins.value !== "0") caps.push(`Mins ≥ ${els.minMins.value}`);
-  if (els.maxAge.value !== "99") caps.push(`Age ≤ ${els.maxAge.value}`);
-  if (els.maxVal.value !== "999999999") caps.push(`Value ≤ ${formatMoney(els.maxVal.value)}`);
-  if (els.maxWage.value !== "999999999") caps.push(`Wage ≤ ${formatMoney(els.maxWage.value)}/wk`);
+  if (maxAge < 99) caps.push(`Age ≤ ${maxAge}`);
+  if (maxVal < 999999999) caps.push(`Value ≤ ${formatMoney(maxVal)}`);
+  if (maxWage < 999999999) caps.push(`Wage ≤ ${formatMoney(maxWage)}/wk`);
   if (els.minRep.value !== "0") caps.push(`Rep ≥ ${Number(els.minRep.value).toLocaleString()}`);
   return caps;
 }
@@ -395,6 +420,7 @@ export function clearDefaultCaps(onRefresh) {
   els.maxAge.value = "99";
   els.maxVal.value = "999999999";
   els.minRep.value = "0";
+  syncCustomBoundInputs();
   onRefresh();
   showToast("Default age, value, and reputation caps cleared");
 }
@@ -410,6 +436,9 @@ export function captureViewSnapshot() {
     if (!el) continue;
     scalars[key] = typeof DEFAULT_FILTERS[key] === "boolean" ? el.checked : el.value;
   }
+  scalars.maxAgeCustom = els.maxAgeCustom?.value || "";
+  scalars.maxValCustom = els.maxValCustom?.value || "";
+  scalars.maxWageCustom = els.maxWageCustom?.value || "";
   const roleVal = els.role.value || "overall";
   const customScore =
     roleVal === "__custom_draft__" && state.scoreConfig
@@ -465,7 +494,14 @@ export function renderSavedViewsSelect(selectedId = "") {
     ...views.map((v) => `<option value="${escapeHtml(v.id)}">${escapeHtml(v.name)} (${escapeHtml(v.pos || "ST")})</option>`),
   ].join("");
   els.savedViewSelect.value = selectedId && views.some((v) => v.id === selectedId) ? selectedId : "";
-  if (els.btnDeleteView) els.btnDeleteView.disabled = !els.savedViewSelect.value;
+  const hasSel = Boolean(els.savedViewSelect.value);
+  if (els.btnDeleteView) els.btnDeleteView.disabled = !hasSel;
+  if (els.btnUpdateView) els.btnUpdateView.disabled = !hasSel;
+  if (els.btnRenameView) els.btnRenameView.disabled = !hasSel;
+  const activeView = views.find((v) => v.id === els.savedViewSelect.value);
+  if (els.viewNameInput && activeView && document.activeElement !== els.viewNameInput) {
+    els.viewNameInput.value = activeView.name;
+  }
 }
 
 export async function applyViewSnapshot(snap, selectPositionFn, refreshFn) {
@@ -484,6 +520,10 @@ export async function applyViewSnapshot(snap, selectPositionFn, refreshFn) {
     if (typeof defVal === "boolean") el.checked = Boolean(val);
     else el.value = String(val);
   }
+  if (els.maxAgeCustom) els.maxAgeCustom.value = String(snap.scalars?.maxAgeCustom ?? "");
+  if (els.maxValCustom) els.maxValCustom.value = String(snap.scalars?.maxValCustom ?? "");
+  if (els.maxWageCustom) els.maxWageCustom.value = String(snap.scalars?.maxWageCustom ?? "");
+  syncCustomBoundInputs();
   const targetPos = snap.pos || state.pos;
   if (targetPos !== state.pos && selectPositionFn) {
     await selectPositionFn(targetPos);
@@ -577,23 +617,30 @@ export function renderActiveFilterChips(dataset, onRefresh) {
     chips.push({ type: "scalar", id, label: `${label}: ≥ ${prefix}${value.toLocaleString()}${suffix}` });
   }
   if (els.maxAge.value !== DEFAULT_FILTERS.maxAge) {
+    const maxAge = readBoundValue(els.maxAge, els.maxAgeCustom, 99);
+    const isOff = els.maxAge.value === "99" || (els.maxAge.value === "__custom__" && maxAge >= 99);
     chips.push({
       type: "scalar",
       id: "maxAge",
-      relaxed: els.maxAge.value === "99",
-      label: els.maxAge.value === "99" ? "No Age Cap" : `Max Age: ≤ ${els.maxAge.value}`,
+      relaxed: isOff,
+      label: isOff ? "Age Cap: Off (≤25 default)" : `Max Age: ≤ ${maxAge}`,
     });
   }
   if (els.maxVal.value !== DEFAULT_FILTERS.maxVal) {
+    const maxVal = readBoundValue(els.maxVal, els.maxValCustom, 999999999);
+    const isOff = els.maxVal.value === "999999999" || (els.maxVal.value === "__custom__" && maxVal >= 999999999);
     chips.push({
       type: "scalar",
       id: "maxVal",
-      relaxed: els.maxVal.value === "999999999",
-      label: els.maxVal.value === "999999999" ? "No Value Cap" : `Max Value: ≤ ${formatMoney(els.maxVal.value)}`,
+      relaxed: isOff,
+      label: isOff ? "Value Cap: Off (≤£15M default)" : `Max Value: ≤ ${formatMoney(maxVal)}`,
     });
   }
   if (els.maxWage.value !== DEFAULT_FILTERS.maxWage) {
-    chips.push({ type: "scalar", id: "maxWage", label: `Max Wage: ≤ ${formatMoney(els.maxWage.value)}/wk` });
+    const maxWage = readBoundValue(els.maxWage, els.maxWageCustom, 999999999);
+    if (maxWage < 999999999) {
+      chips.push({ type: "scalar", id: "maxWage", label: `Max Wage: ≤ ${formatMoney(maxWage)}/wk` });
+    }
   }
   if (els.contract.value !== DEFAULT_FILTERS.contract) {
     const txt = els.contract.selectedOptions[0]?.textContent || els.contract.value;
@@ -604,7 +651,7 @@ export function renderActiveFilterChips(dataset, onRefresh) {
       type: "scalar",
       id: "minRep",
       relaxed: els.minRep.value === "0",
-      label: els.minRep.value === "0" ? "All Reputations" : `Min Rep: ${els.minRep.value}+`,
+      label: els.minRep.value === "0" ? "Rep Cap: Off (5,500+ default)" : `Min Rep: ${els.minRep.value}+`,
     });
   }
   if (els.dynamicPct.checked !== DEFAULT_FILTERS.dynamicPct) {
@@ -626,7 +673,8 @@ export function renderActiveFilterChips(dataset, onRefresh) {
   els.activeFiltersChips.innerHTML = chips
     .map((c, idx) => {
       const cls = c.relaxed ? "chip-btn is-relaxed" : "chip-btn";
-      return `<button type="button" class="${cls}" data-chip-idx="${idx}" aria-label="Remove ${escapeHtml(
+      const actionVerb = c.relaxed ? "Restore default for" : "Remove";
+      return `<button type="button" class="${cls}" data-chip-idx="${idx}" title="${escapeHtml(actionVerb)} ${escapeHtml(c.label)}" aria-label="${escapeHtml(actionVerb)} ${escapeHtml(
         c.label
       )} filter"><span>${escapeHtml(c.label)}</span><span class="chip-x" aria-hidden="true">×</span></button>`;
     })
@@ -645,6 +693,10 @@ export function renderActiveFilterChips(dataset, onRefresh) {
         if (chip.id === "dynamicPct") els.dynamicPct.checked = DEFAULT_FILTERS.dynamicPct;
         else if (chip.id === "includeHull") els.includeHull.checked = DEFAULT_FILTERS.includeHull;
         else els[chip.id].value = DEFAULT_FILTERS[chip.id];
+        if (chip.id === "maxAge" && els.maxAgeCustom) els.maxAgeCustom.value = "";
+        if (chip.id === "maxVal" && els.maxValCustom) els.maxValCustom.value = "";
+        if (chip.id === "maxWage" && els.maxWageCustom) els.maxWageCustom.value = "";
+        syncCustomBoundInputs();
       }
       onRefresh();
     });
@@ -667,6 +719,36 @@ export function saveCurrentView(showToastFn = showToast) {
   showToastFn(`Saved view "${name}"`);
 }
 
+export function updateSelectedView(showToastFn = showToast) {
+  const id = els.savedViewSelect?.value;
+  if (!id) return;
+  const views = Array.isArray(state.savedViews) ? state.savedViews : [];
+  const idx = views.findIndex((v) => v.id === id);
+  if (idx < 0) return;
+  const snap = captureViewSnapshot();
+  const newName = els.viewNameInput?.value.trim() || views[idx].name;
+  const updated = { ...views[idx], ...snap, id, name: newName };
+  state.savedViews = views.map((v, i) => (i === idx ? updated : v));
+  saveSavedViews();
+  renderSavedViewsSelect(id);
+  showToastFn(`Updated view "${newName}"`);
+}
+
+export function renameSelectedView(showToastFn = showToast) {
+  const id = els.savedViewSelect?.value;
+  const newName = els.viewNameInput?.value.trim() || "";
+  if (!id || !newName) {
+    showToastFn("Enter a view name to rename");
+    return;
+  }
+  const views = Array.isArray(state.savedViews) ? state.savedViews : [];
+  if (!views.some((v) => v.id === id)) return;
+  state.savedViews = views.map((v) => (v.id === id ? { ...v, name: newName } : v));
+  saveSavedViews();
+  renderSavedViewsSelect(id);
+  showToastFn(`Renamed view to "${newName}"`);
+}
+
 export function resetAllFilters(onRefresh) {
   els.search.value = "";
   for (const key of Object.keys(state.filters)) {
@@ -680,6 +762,10 @@ export function resetAllFilters(onRefresh) {
     if (typeof value === "boolean") els[id].checked = value;
     else els[id].value = value;
   }
+  if (els.maxAgeCustom) els.maxAgeCustom.value = "";
+  if (els.maxValCustom) els.maxValCustom.value = "";
+  if (els.maxWageCustom) els.maxWageCustom.value = "";
+  syncCustomBoundInputs();
   onRefresh();
   showToast("All filters reset");
 }
@@ -693,7 +779,7 @@ export function positionPopoverFallback(popover, trigger) {
   const popH = popRect.height || 300;
 
   let left = rect.left;
-  if (popover.id === "column-chooser-popover" || popover.id === "pop-saved-views") {
+  if (popover.id === "column-chooser-popover" || popover.id === "pop-saved-views" || popover.id === "pop-shortcuts") {
     left = rect.right - popW;
   }
   left = Math.max(8, Math.min(window.innerWidth - popW - 8, left));
@@ -715,6 +801,9 @@ export function wirePopoverBehaviors({ onRefresh, onOpenColumnChooser }) {
     ...(els.popSavedViews && els.btnViewsMenu
       ? [{ popover: els.popSavedViews, trigger: els.btnViewsMenu, facet: null }]
       : []),
+    ...(els.popShortcuts && els.btnShortcutsHelp
+      ? [{ popover: els.popShortcuts, trigger: els.btnShortcutsHelp, facet: null }]
+      : []),
   ];
 
   for (const { popover, trigger, facet } of allPopovers) {
@@ -734,7 +823,9 @@ export function wirePopoverBehaviors({ onRefresh, onOpenColumnChooser }) {
             const name = popover.dataset.facet;
             state.popoverOrderSnapshots.delete(name);
             const input = popover.querySelector(".popover-search");
+            const clearSearchBtn = popover.querySelector(".popover-search-clear");
             if (input) input.value = "";
+            if (clearSearchBtn) clearSearchBtn.hidden = true;
             if (name === "clubs") state.clubOptionLimit = CLUB_PAGE_SIZE;
             renderFacetOptions(name, ds);
           }
@@ -749,12 +840,38 @@ export function wirePopoverBehaviors({ onRefresh, onOpenColumnChooser }) {
 
     if (facet) {
       const searchEl = popover.querySelector(".popover-search");
+      const clearSearchBtn = popover.querySelector(".popover-search-clear");
       if (searchEl) {
         searchEl.addEventListener("input", () => {
+          if (clearSearchBtn) clearSearchBtn.hidden = !searchEl.value;
           const ds = activeDataset();
           const name = popover.dataset.facet;
           if (name === "clubs") state.clubOptionLimit = CLUB_PAGE_SIZE;
           if (ds) renderFacetOptions(name, ds);
+        });
+        searchEl.addEventListener("keydown", (ev) => {
+          if (ev.key === "ArrowDown") {
+            const firstOpt = facet.listbox.querySelector('[role="option"]');
+            if (firstOpt) {
+              ev.preventDefault();
+              firstOpt.focus();
+            }
+          } else if (ev.key === "Enter") {
+            const opts = facet.listbox.querySelectorAll('[role="option"]');
+            if (opts.length === 1) {
+              ev.preventDefault();
+              opts[0].click();
+            }
+          }
+        });
+      }
+      if (clearSearchBtn && searchEl) {
+        clearSearchBtn.addEventListener("click", () => {
+          searchEl.value = "";
+          clearSearchBtn.hidden = true;
+          const ds = activeDataset();
+          if (ds) renderFacetOptions(popover.dataset.facet, ds);
+          searchEl.focus();
         });
       }
 
@@ -764,6 +881,7 @@ export function wirePopoverBehaviors({ onRefresh, onOpenColumnChooser }) {
           const name = popover.dataset.facet;
           state.filters[name].clear();
           if (searchEl) searchEl.value = "";
+          if (clearSearchBtn) clearSearchBtn.hidden = true;
           onRefresh();
         });
       }

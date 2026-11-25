@@ -315,6 +315,35 @@ public class MoneyballButtonBehaviour : MonoBehaviour
             btn.style.borderTopRightRadius = 20f;
             btn.style.borderBottomLeftRadius = 20f;
             btn.style.borderBottomRightRadius = 20f;
+            btn.style.borderLeftColor = new StyleColor(new Color(0.96f, 0.62f, 0.04f, 0.45f));
+            btn.style.borderRightColor = new StyleColor(new Color(0.96f, 0.62f, 0.04f, 0.45f));
+            btn.style.borderTopColor = new StyleColor(new Color(0.96f, 0.62f, 0.04f, 0.45f));
+            btn.style.borderBottomColor = new StyleColor(new Color(0.96f, 0.62f, 0.04f, 0.45f));
+
+            btn.RegisterCallback((EventCallback<MouseEnterEvent>)(_ =>
+            {
+                btn.style.backgroundColor = new StyleColor(new Color(0.14f, 0.18f, 0.25f, 0.98f));
+                btn.style.borderLeftWidth = 1.5f;
+                btn.style.borderRightWidth = 1.5f;
+                btn.style.borderTopWidth = 1.5f;
+                btn.style.borderBottomWidth = 1.5f;
+            }));
+            btn.RegisterCallback((EventCallback<MouseLeaveEvent>)(_ =>
+            {
+                btn.style.backgroundColor = new StyleColor(new Color(0.06f, 0.08f, 0.12f, 0.94f));
+                btn.style.borderLeftWidth = 0f;
+                btn.style.borderRightWidth = 0f;
+                btn.style.borderTopWidth = 0f;
+                btn.style.borderBottomWidth = 0f;
+            }));
+            btn.RegisterCallback((EventCallback<PointerDownEvent>)(_ =>
+            {
+                btn.style.opacity = 0.8f;
+            }));
+            btn.RegisterCallback((EventCallback<PointerUpEvent>)(_ =>
+            {
+                btn.style.opacity = Plugin.IsLaunching ? 0.65f : 1.0f;
+            }));
 
             var iconTex = GetOrLoadIconTexture();
             if (iconTex != null)

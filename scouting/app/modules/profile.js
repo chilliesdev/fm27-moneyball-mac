@@ -164,9 +164,26 @@ export function openPlayerDialog(player, dataset, season = state.season, loadPos
     els.dialogPinCompare.setAttribute("aria-pressed", String(isPinned));
     els.dialogPinCompare.hidden = !dataset;
   }
+  if (els.dialogPinBanner) {
+    const crossPin =
+      dataset && state.pinnedCompare && state.pinnedCompare.position !== dataset.position ? state.pinnedCompare : null;
+    if (crossPin) {
+      els.dialogPinBanner.innerHTML = `<span>Pinned: <strong>${escapeHtml(playerName(crossPin.player))}</strong> (${escapeHtml(crossPin.position)})</span> <button type="button" class="btn-link" id="btn-clear-cross-pin">Unpin</button>`;
+      els.dialogPinBanner.hidden = false;
+      els.dialogPinBanner.querySelector("#btn-clear-cross-pin")?.addEventListener("click", () => {
+        state.pinnedCompare = null;
+        els.dialogPinBanner.hidden = true;
+        showToast("Unpinned comparison player");
+      });
+    } else {
+      els.dialogPinBanner.hidden = true;
+      els.dialogPinBanner.innerHTML = "";
+    }
+  }
   els.dialogRadarPanel.hidden = !dataset;
   els.dialogProfileMetrics.hidden = !dataset;
   if (!dataset) {
+    state.activeComparePlayers = [];
     els.playerDialog.showModal();
     return;
   }
@@ -196,18 +213,29 @@ export function openPlayerDialog(player, dataset, season = state.season, loadPos
   });
 
   if (els.dialogCompareSearch) els.dialogCompareSearch.value = "";
+  if (els.dialogCompareSearchStatus) els.dialogCompareSearchStatus.hidden = true;
 
   const rebuildCompareOptions = (searchQuery = "") => {
     const q = normalizeSearchText(searchQuery);
-    const searchMatches = q
-      ? dataset.players
-          .filter(
-            (p) =>
-              p.uid !== player.uid &&
-              normalizeSearchText(`${playerName(p)} ${clubNameOf(p)}`).includes(q)
-          )
-          .slice(0, 25)
+    const allSearchMatches = q
+      ? dataset.players.filter(
+          (p) =>
+            p.uid !== player.uid &&
+            normalizeSearchText(`${playerName(p)} ${clubNameOf(p)}`).includes(q)
+        )
       : [];
+    const searchMatches = allSearchMatches.slice(0, 25);
+
+    if (els.dialogCompareSearchStatus) {
+      if (q) {
+        els.dialogCompareSearchStatus.textContent = allSearchMatches.length
+          ? `${allSearchMatches.length} match${allSearchMatches.length === 1 ? "" : "es"} in ${dataset.position}`
+          : `No matches in ${dataset.position}`;
+        els.dialogCompareSearchStatus.hidden = false;
+      } else {
+        els.dialogCompareSearchStatus.hidden = true;
+      }
+    }
 
     const curVal = els.dialogCompareSelect.value;
     const fmtOpt = (p, showClub = true) =>
@@ -233,11 +261,10 @@ export function openPlayerDialog(player, dataset, season = state.season, loadPos
         : []),
     ].join("");
 
-    if (searchMatches.length && q) {
-      els.dialogCompareSelect.value = searchMatches[0].uid;
-    } else if (curVal && [...els.dialogCompareSelect.options].some((o) => o.value === curVal)) {
+    if (curVal && [...els.dialogCompareSelect.options].some((o) => o.value === curVal)) {
       els.dialogCompareSelect.value = curVal;
     }
+    return searchMatches;
   };
 
   rebuildCompareOptions("");
@@ -263,10 +290,68 @@ export function openPlayerDialog(player, dataset, season = state.season, loadPos
     if (!playerByUid.has(h.uid)) playerByUid.set(h.uid, h);
   }
 
-  const renderMetricRows = (cmp) => {
+  const initialExtra = (options?.extraComparePlayers || [])
+    .filter((p) => p && p.uid !== player.uid && p.uid !== els.dialogCompareSelect.value)
+    .slice(0, 2);
+  let extraCompareList = initialExtra;
+
+  const getActiveCompares = () => {
+    const cid = els.dialogCompareSelect.value;
+    const primary = cid ? playerByUid.get(cid) || null : null;
+    const list = [];
+    const seen = new Set([player.uid]);
+    if (primary && !seen.has(primary.uid)) {
+      seen.add(primary.uid);
+      list.push(primary);
+    }
+    for (const ex of extraCompareList) {
+      if (ex && !seen.has(ex.uid) && list.length < 3) {
+        seen.add(ex.uid);
+        list.push(ex);
+      }
+    }
+    state.activeComparePlayers = list;
+    return list;
+  };
+
+  const renderCompareChips = (compareList) => {
+    if (!els.dialogCompareChips) return;
+    if (!compareList.length) {
+      els.dialogCompareChips.hidden = true;
+      els.dialogCompareChips.innerHTML = "";
+      return;
+    }
+    els.dialogCompareChips.hidden = false;
+    els.dialogCompareChips.innerHTML = compareList
+      .map(
+        (cmp, idx) =>
+          `<button type="button" class="chip-btn compare-chip cmp-slot-${idx}" data-cmp-uid="${escapeHtml(cmp.uid)}" aria-label="Remove ${escapeHtml(playerName(cmp))} from comparison">
+            <span class="cmp-dot" aria-hidden="true"></span>
+            <span>${escapeHtml(playerName(cmp))}</span>
+            <span class="chip-x" aria-hidden="true">×</span>
+          </button>`
+      )
+      .join("");
+    els.dialogCompareChips.querySelectorAll(".compare-chip").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const uid = btn.dataset.cmpUid;
+        if (els.dialogCompareSelect.value === uid) {
+          extraCompareList = extraCompareList.filter((e) => e.uid !== uid);
+          const nextPrimary = extraCompareList.shift() || null;
+          els.dialogCompareSelect.value = nextPrimary?.uid || "";
+        } else {
+          extraCompareList = extraCompareList.filter((e) => e.uid !== uid);
+        }
+        drawCompare();
+      });
+    });
+  };
+
+  const renderMetricRows = (compareList) => {
+    const cmps = Array.isArray(compareList) ? compareList : [];
     if (els.dialogCompareLegend) {
-      if (cmp) {
-        els.dialogCompareLegend.textContent = `vs ${playerName(cmp)}`;
+      if (cmps.length) {
+        els.dialogCompareLegend.textContent = `vs ${cmps.map((c) => playerName(c)).join(", ")}`;
         els.dialogCompareLegend.hidden = false;
       } else {
         els.dialogCompareLegend.hidden = true;
@@ -274,44 +359,67 @@ export function openPlayerDialog(player, dataset, season = state.season, loadPos
     }
     els.dialogStatsList.innerHTML = displayMetrics
       .map((m) => {
+        const formatted = formatStat(m.key, player[m.key]);
         const pct = getPlayerMetricPct(player, m.key, dataset, baseline);
-        const cmpHtml = cmp
-          ? (() => {
-              const cmpPct = getPlayerMetricPct(cmp, m.key, dataset, baseline);
-              return `<span class="stat-cmp-val">vs ${formatStat(m.key, cmp[m.key])} <span class="pct-pill ${pctClass(cmpPct)}">${cmpPct}</span></span>`;
-            })()
-          : "";
+        const isUnavailable = formatted === "—" || pct === null || pct === undefined;
+        const pctHtml = isUnavailable
+          ? `<span class="pct-pill pct-mid is-unavailable">n/a</span>`
+          : `<span class="pct-pill ${pctClass(pct)}">${pct}</span>`;
+        const cmpHtml = cmps
+          .map((cmp, idx) => {
+            const cFormatted = formatStat(m.key, cmp[m.key]);
+            const cmpPct = getPlayerMetricPct(cmp, m.key, dataset, baseline);
+            const cPill =
+              cFormatted === "—" || cmpPct === null || cmpPct === undefined
+                ? ""
+                : ` <span class="pct-pill ${pctClass(cmpPct)}">${cmpPct}</span>`;
+            return `<span class="stat-cmp-val cmp-slot-${idx}">vs ${cFormatted}${cPill}</span>`;
+          })
+          .join("");
         return `
           <div class="stat-row">
             <span>${escapeHtml(m.label)}</span>
             <div class="stat-vals">
-              <strong>${formatStat(m.key, player[m.key])}</strong>
-              <span class="pct-pill ${pctClass(pct)}">${pct}</span>
+              <strong>${formatted}</strong>
+              ${pctHtml}
               ${cmpHtml}
             </div>
-            <div class="stat-bar-wrap"><div class="stat-bar-fill ${pctClass(pct)}" style="width:${pct}%"></div></div>
+            <div class="stat-bar-wrap">${
+              isUnavailable ? "" : `<div class="stat-bar-fill ${pctClass(pct)}" style="width:${pct}%"></div>`
+            }</div>
           </div>
         `;
       })
       .join("");
   };
 
+  const cmpClubLabel = (cmp) =>
+    cmp?.is_hull && season === state.season ? state.meta?.club_short_name || "Club" : clubNameOf(cmp);
+
   const drawCompare = () => {
-    const cid = els.dialogCompareSelect.value;
-    const cmp = cid ? playerByUid.get(cid) || null : null;
-    const clubLabel = cmp?.is_hull && season === state.season ? state.meta?.club_short_name || "Club" : clubNameOf(cmp);
-    renderRadar(player, cmp, dataset, baseline, clubLabel);
-    renderMetricRows(cmp);
+    const activeCmps = getActiveCompares();
+    renderCompareChips(activeCmps);
+    renderRadar(player, activeCmps, dataset, baseline, cmpClubLabel);
+    renderMetricRows(activeCmps);
   };
   els.dialogCompareSelect.onchange = drawCompare;
   if (els.dialogCompareSearch) {
     els.dialogCompareSearch.oninput = () => {
       rebuildCompareOptions(els.dialogCompareSearch.value);
-      drawCompare();
+    };
+    els.dialogCompareSearch.onkeydown = (ev) => {
+      if (ev.key === "Enter") {
+        const matches = rebuildCompareOptions(els.dialogCompareSearch.value);
+        if (matches.length) {
+          ev.preventDefault();
+          els.dialogCompareSelect.value = matches[0].uid;
+          drawCompare();
+        }
+      }
     };
   }
 
-  renderMetricRows(null);
+  renderMetricRows([]);
   els.progressionChart.hidden = true;
   if (els.dialogProgressionMetric) {
     els.dialogProgressionMetric.value = "";
@@ -323,7 +431,7 @@ export function openPlayerDialog(player, dataset, season = state.season, loadPos
   requestAnimationFrame(() => {
     if (!els.playerDialog.open || state.dialogOpenToken !== openToken) return;
     drawCompare();
-    renderPlayerProgression(player, dataset.position, season, openToken, loadPositionFn);
+    renderPlayerProgression(player, dataset.position, season, openToken, loadPositionFn, state.activeComparePlayers);
   });
 }
 
@@ -373,7 +481,11 @@ function enrichShortlistEntry(entry) {
   const filteredMatch = state.filtered?.find((r) => r.uid === entry.uid);
   const cachedDs = entry.pos_group ? state.cache.get(`${state.season || "latest"}:${entry.pos_group}`) : null;
   const cachedMatch = filteredMatch || cachedDs?.players?.find((p) => p.uid === entry.uid);
-  if (!cachedMatch) return entry;
+  if (!cachedMatch) return { ...entry, score_label: "Saved Score" };
+  const hasFilteredScore = Boolean(filteredMatch);
+  const roleLabel = hasFilteredScore
+    ? els.role?.selectedOptions?.[0]?.textContent?.trim() || "Role Score"
+    : "Overall Score";
   return {
     ...entry,
     img_id: cachedMatch.img_id ?? entry.img_id,
@@ -385,6 +497,7 @@ function enrichShortlistEntry(entry) {
     minutes: cachedMatch.minutes ?? entry.minutes,
     avg_rating: cachedMatch.avg_rating ?? entry.avg_rating,
     active_score: filteredMatch?.active_score ?? cachedMatch.score_overall ?? entry.active_score,
+    score_label: roleLabel,
     value: cachedMatch.value ?? entry.value,
     value_state: cachedMatch.value_state ?? entry.value_state,
     wage: cachedMatch.wage ?? entry.wage,
@@ -424,10 +537,24 @@ export function filteredShortlist() {
 }
 
 export function updateShortlistCompareButton() {
-  if (!els.btnShortlistCompare) return;
   const cnt = state.shortlistCompareUids.size;
-  els.btnShortlistCompare.textContent = `Compare Selected (${cnt})`;
-  els.btnShortlistCompare.hidden = cnt < 2;
+  if (els.btnShortlistCompare) {
+    els.btnShortlistCompare.textContent = `Compare Selected (${cnt})`;
+    els.btnShortlistCompare.hidden = cnt < 2;
+  }
+  if (els.btnShortlistClearCompare) {
+    els.btnShortlistClearCompare.hidden = cnt < 1;
+  }
+  if (els.shortlistCompareHint) {
+    const firstUid = [...state.shortlistCompareUids][0];
+    const lockedPos = firstUid ? state.shortlist[firstUid]?.pos_group : "";
+    if (cnt >= 1 && lockedPos) {
+      els.shortlistCompareHint.textContent = `Comparing ${lockedPos} players (${cnt}/4 selected). Other positions disabled.`;
+      els.shortlistCompareHint.hidden = false;
+    } else {
+      els.shortlistCompareHint.hidden = true;
+    }
+  }
 }
 
 export async function refreshShortlistDatasets(loadPositionFn) {
@@ -462,21 +589,29 @@ export function renderShortlist() {
   els.btnClearShortlist.disabled = !saved.length;
   updateShortlistCompareButton();
 
+  const firstCmpUid = [...state.shortlistCompareUids][0];
+  const lockedPos = firstCmpUid ? state.shortlist[firstCmpUid]?.pos_group || "" : "";
+
   els.shortlistBody.innerHTML = items.length
     ? items
         .map((player) => {
           const scorePill =
             player.active_score != null && Number.isFinite(Number(player.active_score))
-              ? `<span class="pct-pill ${pctClass(Math.round(Number(player.active_score)))}">${Number(player.active_score).toFixed(1)}</span>`
+              ? `<span class="pct-pill ${pctClass(Math.round(Number(player.active_score)))}" title="${escapeHtml(player.score_label || "Role Score")}">${Number(player.active_score).toFixed(1)}</span>`
               : "";
           const isCmp = state.shortlistCompareUids.has(player.uid);
+          const posMismatch = Boolean(lockedPos && !isCmp && player.pos_group !== lockedPos);
+          const cmpDisabled = !player.pos_group || posMismatch;
+          const cmpTitle = posMismatch
+            ? `Only ${lockedPos} players can be compared together`
+            : "Select to compare";
           const posTag = player.pos_group ? `<span class="score-default-tag">${escapeHtml(player.pos_group)}</span>` : "";
           return `
     <div class="shortlist-item" data-uid="${escapeHtml(player.uid)}">
       <div class="shortlist-item-check">
         <input type="checkbox" class="shortlist-compare-cb" data-uid="${escapeHtml(player.uid)}" ${
             isCmp ? "checked" : ""
-          } ${player.pos_group ? "" : "disabled"} title="Select to compare" aria-label="Select ${escapeHtml(playerName(player))} to compare">
+          } ${cmpDisabled ? "disabled" : ""} title="${escapeHtml(cmpTitle)}" aria-label="Select ${escapeHtml(playerName(player))} to compare">
         <img class="tab-avatar" src="${personImgUrl(player)}" alt="" width="34" height="34" loading="lazy" decoding="async">
       </div>
       <div class="shortlist-item-main">
@@ -490,7 +625,10 @@ export function renderShortlist() {
         <div class="subtitle">Mins ${escapeHtml(player.minutes ?? "—")} · Value ${escapeHtml(formatPlayerValue(player))} · Wage ${
             player.wage == null ? "—" : `${formatMoney(player.wage)}/wk`
           } · Contract ${escapeHtml(player.contract_end || "—")}</div>
-        <input type="text" class="shortlist-note-input" data-action="note" placeholder="Add scout note..." aria-label="Scout note for ${escapeHtml(playerName(player))}" value="${escapeHtml(player.note || "")}">
+        <div class="shortlist-note-row">
+          <input type="text" class="shortlist-note-input" data-action="note" placeholder="Add scout note..." aria-label="Scout note for ${escapeHtml(playerName(player))}" value="${escapeHtml(player.note || "")}">
+          <span class="shortlist-note-saved subtitle" aria-live="polite" hidden>Saved</span>
+        </div>
       </div>
       <div class="dialog-head-actions">
         <button type="button" class="btn secondary" data-action="copy-name" ${player.name ? "" : "disabled"}>Copy Name</button>

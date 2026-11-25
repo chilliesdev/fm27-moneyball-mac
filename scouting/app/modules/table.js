@@ -24,6 +24,17 @@ export function updateCompareSelectedButton() {
   const count = state.selectedCompareUids.size;
   els.compareSelectedCount.textContent = String(count);
   els.btnCompareSelected.hidden = count < 2;
+  if (els.btnClearCompare) {
+    els.btnClearCompare.hidden = count < 1;
+  }
+}
+
+export function updateColumnChooserBadge() {
+  if (!els.colChooserCount || !state.tabulatorTable) return;
+  const cols = state.tabulatorTable.getColumns().filter((c) => c.getField() && c.getField() !== "name");
+  const visibleCount = cols.filter((c) => c.isVisible()).length;
+  els.colChooserCount.textContent = String(visibleCount);
+  els.colChooserCount.hidden = visibleCount === 0;
 }
 
 export function buildTabulatorColumns(dataset) {
@@ -55,7 +66,10 @@ export function buildTabulatorColumns(dataset) {
       sorterParams: { alignEmptyValues: "bottom" },
       formatter: (cell) => {
         const p = cell.getRow().getData();
-        const isSaved = Boolean(state.shortlist[p.uid]);
+        const savedEntry = state.shortlist[p.uid];
+        const isSaved = Boolean(savedEntry);
+        const noteTip = savedEntry?.note ? ` — Note: ${savedEntry.note}` : "";
+        const starLabel = isSaved ? `Remove from shortlist${noteTip}` : "Add to shortlist";
         const isCompared = state.selectedCompareUids.has(p.uid);
         const badge = p.is_hull ? `<span class="hull-badge">${escapeHtml(clubTag)}</span>` : "";
         return `
@@ -65,7 +79,7 @@ export function buildTabulatorColumns(dataset) {
             } title="Select for comparison" aria-label="Select ${escapeHtml(playerName(p))} for comparison">
             <button type="button" class="row-star-btn ${isSaved ? "is-saved" : ""}" data-uid="${escapeHtml(
           p.uid
-        )}" aria-pressed="${isSaved}" aria-label="${isSaved ? "Remove from shortlist" : "Add to shortlist"}">${
+        )}" aria-pressed="${isSaved}" title="${escapeHtml(starLabel)}" aria-label="${escapeHtml(starLabel)}">${
           isSaved ? "★" : "☆"
         }</button>
             <img class="tab-avatar" src="${personImgUrl(p)}" alt="" width="26" height="26" loading="lazy" decoding="async">
@@ -272,10 +286,13 @@ export function buildTabulatorColumns(dataset) {
       formatter: (cell) => {
         const p = cell.getRow().getData();
         const val = p[meta.key];
+        const formatted = formatStat(meta.key, val);
         const pct = p.active_pcts?.[meta.key];
-        const pctHtml =
-          !hidePcts && pct !== undefined ? ` <span class="pct-pill ${pctClass(pct)}">${pct}</span>` : "";
-        return `<span class="metric-cell-wrap">${formatStat(meta.key, val)}${pctHtml}</span>`;
+        if (formatted === "—" || pct === null || pct === undefined) {
+          return `<span class="metric-cell-wrap is-unavailable" title="Unavailable">${formatted}</span>`;
+        }
+        const pctHtml = !hidePcts ? ` <span class="pct-pill ${pctClass(pct)}">${pct}</span>` : "";
+        return `<span class="metric-cell-wrap">${formatted}${pctHtml}</span>`;
       },
     });
   }
@@ -298,7 +315,7 @@ async function tableSetColumnsAndData(cols, rows, resetSort) {
 }
 
 export function getTableHeight() {
-  return state.uiPrefs?.tableExpanded ? "auto" : "clamp(420px, 74vh, 860px)";
+  return state.uiPrefs?.tableExpanded ? "clamp(620px, 84vh, 1300px)" : "clamp(420px, 74vh, 860px)";
 }
 
 export async function initOrUpdateTable(dataset, rows, onRowClick) {
@@ -377,6 +394,7 @@ export async function initOrUpdateTable(dataset, rows, onRowClick) {
 
   if (seq === state.tableUpdateSeq) {
     els.tableCaption.textContent = `${POS_LABELS[dataset.position]} — Showing all ${rows.length.toLocaleString()} matching players`;
+    updateColumnChooserBadge();
   }
 }
 
@@ -479,7 +497,13 @@ export function renderColumnChooser(onColumnsChanged = null) {
       if (cb.dataset.inTable === "1") {
         if (cb.checked) table.showColumn(field);
         else table.hideColumn(field);
-        if (cb.checked && onColumnsChanged) onColumnsChanged();
+        updateColumnChooserBadge();
+        const needsPctCompute =
+          cb.checked &&
+          catalog.byKey.has(field) &&
+          state.filtered.length > 0 &&
+          !Object.prototype.hasOwnProperty.call(state.filtered[0]?.active_pcts || {}, field);
+        if (needsPctCompute && onColumnsChanged) onColumnsChanged();
       } else if (onColumnsChanged) {
         onColumnsChanged();
         cb.dataset.inTable = "1";
@@ -494,6 +518,7 @@ export function renderColumnChooser(onColumnsChanged = null) {
       saveColPrefs();
       const { cols: defaultCols } = buildTabulatorColumns(dataset);
       table.setColumns(defaultCols);
+      updateColumnChooserBadge();
       renderColumnChooser(onColumnsChanged);
       showToast("Table columns reset to default");
     });
