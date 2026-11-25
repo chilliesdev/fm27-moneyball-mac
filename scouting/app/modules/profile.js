@@ -1,6 +1,6 @@
 import { collator } from "./constants.js";
 import { els, saveShortlist, state } from "./state.js";
-import { renderPlayerProgression, renderRadar } from "./charts.js";
+import { getProfileDisplayMetrics, renderPlayerProgression, renderRadar } from "./charts.js";
 import { readScalarFilters } from "./filters.js";
 import { getBaselinePool, getPlayerMetricPct } from "./scoring.js";
 import {
@@ -10,6 +10,7 @@ import {
   formatMoney,
   formatPlayerValue,
   formatStat,
+  normalizeSearchText,
   parsePlayerPositions,
   pctClass,
   personImgUrl,
@@ -18,9 +19,9 @@ import {
 } from "./utils.js";
 
 function renderProfileFacts(element, facts) {
-  element.innerHTML = facts.map(([label, value]) =>
-    `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value ?? "—")}</dd></div>`
-  ).join("");
+  element.innerHTML = facts
+    .map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value ?? "—")}</dd></div>`)
+    .join("");
 }
 
 function getOrderedTableRows() {
@@ -60,14 +61,22 @@ export function stepPlayerDialog(delta, loadPositionFn) {
   const idx = rows.findIndex((r) => r.uid === active.player.uid);
   const next = rows[idx + delta];
   if (!next) return;
-  openPlayerDialog(next, active.dataset, active.season, loadPositionFn);
+  openPlayerDialog(next, active.dataset, active.season, loadPositionFn, { preserveCompare: true });
 }
 
-export function openPlayerDialog(player, dataset, season = state.season, loadPositionFn) {
+export function openPlayerDialog(player, dataset, season = state.season, loadPositionFn, options = {}) {
+  const prevCompare =
+    options?.compareUid !== undefined
+      ? options.compareUid
+      : options?.preserveCompare
+        ? els.dialogCompareSelect?.value
+        : undefined;
   state.activeProfile = { player, dataset, season };
   state.dialogOpenToken += 1;
   const openToken = state.dialogOpenToken;
   updatePrevNextButtons(player, dataset);
+  const dialogBody = els.playerDialog?.querySelector(".dialog-body");
+  if (dialogBody) dialogBody.scrollTop = 0;
 
   els.dialogPlayerImg.src = personImgUrl(player);
   els.dialogPlayerImg.alt = playerName(player);
@@ -76,6 +85,19 @@ export function openPlayerDialog(player, dataset, season = state.season, loadPos
   els.dialogName.textContent = playerName(player);
   els.dialogCopyName.disabled = !player.name;
   els.dialogMeta.textContent = [clubNameOf(player), player.league].filter(Boolean).join(" · ");
+
+  if (els.dialogScorePill) {
+    const rawScore = player.active_score ?? player.score_overall;
+    if (dataset && rawScore != null && Number.isFinite(Number(rawScore))) {
+      const numScore = Number(rawScore);
+      els.dialogScorePill.textContent = `Score ${numScore.toFixed(1)}`;
+      els.dialogScorePill.className = `pct-pill ${pctClass(Math.round(numScore))}`;
+      els.dialogScorePill.hidden = false;
+    } else {
+      els.dialogScorePill.hidden = true;
+    }
+  }
+
   const accomplishedList = parsePlayerPositions(player.accomplished);
   renderProfileFacts(els.dialogProfileFacts, [
     ["Age", player.age],
@@ -90,11 +112,38 @@ export function openPlayerDialog(player, dataset, season = state.season, loadPos
     ...(player.on_loan ? [["On Loan From", player.loan_parent || "—"]] : []),
   ]);
 
+  if (els.dialogRolesSection && els.dialogRoleScores) {
+    const roleEntries = [];
+    if (dataset && player.score_overall != null) {
+      roleEntries.push(["Overall", Number(player.score_overall)]);
+    }
+    for (const [slug, info] of Object.entries(dataset?.roles || {})) {
+      const val = player[`score_${slug}`];
+      if (val != null && Number.isFinite(Number(val))) {
+        roleEntries.push([info.label, Number(val)]);
+      }
+    }
+    if (roleEntries.length) {
+      roleEntries.sort((a, b) => b[1] - a[1]);
+      els.dialogRolesSection.hidden = false;
+      renderProfileFacts(
+        els.dialogRoleScores,
+        roleEntries.map(([label, score]) => [label, score.toFixed(1)])
+      );
+    } else {
+      els.dialogRolesSection.hidden = true;
+    }
+  }
+
   const seasonLabel = season || state.meta?.season;
   els.dialogSeasonHeading.textContent = seasonLabel ? `League Season Stats · ${seasonLabel}` : "League Season Stats";
   const seasonStats = [
-    ["apps", "Appearances"], ["starts", "Starts"], ["minutes", "Minutes"],
-    ["goals", "Goals"], ["assists", "Assists"], ["avg_rating", "Average Rating"],
+    ["apps", "Appearances"],
+    ["starts", "Starts"],
+    ["minutes", "Minutes"],
+    ["goals", "Goals"],
+    ["assists", "Assists"],
+    ["avg_rating", "Average Rating"],
   ];
   if (dataset?.position === "GK") {
     seasonStats.push(["save_pct", "Save %"], ["clean_sheet_pct", "Clean Sheet %"]);
@@ -102,9 +151,10 @@ export function openPlayerDialog(player, dataset, season = state.season, loadPos
   const hasSeasonStats = player.minutes != null;
   els.dialogSeasonEmpty.hidden = hasSeasonStats;
   els.dialogSeasonStats.hidden = !hasSeasonStats;
-  renderProfileFacts(els.dialogSeasonStats, seasonStats.map(([key, label]) => [
-    label, formatStat(key, player[key]),
-  ]));
+  renderProfileFacts(
+    els.dialogSeasonStats,
+    seasonStats.map(([key, label]) => [label, formatStat(key, player[key])])
+  );
 
   const isSaved = Boolean(state.shortlist[player.uid]);
   els.dialogShortlistBtn.textContent = isSaved ? "Remove from Shortlist" : "Add to Shortlist";
@@ -139,71 +189,134 @@ export function openPlayerDialog(player, dataset, season = state.season, loadPos
     seenCompareUids.add(p.uid);
     return true;
   });
-  els.dialogCompareSelect.innerHTML = [
-    `<option value="">No comparison</option>`,
-    ...hullPool.map(
-      (h) => `<option value="${escapeHtml(h.uid)}">${escapeHtml(playerName(h))} (${escapeHtml(h.positions)}, ${h.minutes}m)</option>`
-    ),
-    ...hullOther.map(
-      (h) => `<option value="${escapeHtml(h.uid)}">${escapeHtml(playerName(h))} (${escapeHtml(h.positions)}, ${h.minutes}m)</option>`
-    ),
-    ...(pinnedCmp
-      ? [
-          `<optgroup label="Pinned"><option value="${escapeHtml(pinnedCmp.uid)}">${escapeHtml(
-            playerName(pinnedCmp)
-          )} (${escapeHtml(clubNameOf(pinnedCmp))}, ${pinnedCmp.minutes}m)</option></optgroup>`,
-        ]
-      : []),
-    ...(shortlistCompare.length
-      ? [
-          `<optgroup label="Shortlisted">${shortlistCompare
-            .map(
-              (s) =>
-                `<option value="${escapeHtml(s.uid)}">${escapeHtml(playerName(s))} (${escapeHtml(clubNameOf(s))}, ${s.minutes}m)</option>`
-            )
-            .join("")}</optgroup>`,
-        ]
-      : []),
-  ].join("");
+  const extraCompare = (options?.extraComparePlayers || []).filter((p) => {
+    if (!p || seenCompareUids.has(p.uid)) return false;
+    seenCompareUids.add(p.uid);
+    return true;
+  });
+
+  if (els.dialogCompareSearch) els.dialogCompareSearch.value = "";
+
+  const rebuildCompareOptions = (searchQuery = "") => {
+    const q = normalizeSearchText(searchQuery);
+    const searchMatches = q
+      ? dataset.players
+          .filter(
+            (p) =>
+              p.uid !== player.uid &&
+              normalizeSearchText(`${playerName(p)} ${clubNameOf(p)}`).includes(q)
+          )
+          .slice(0, 25)
+      : [];
+
+    const curVal = els.dialogCompareSelect.value;
+    const fmtOpt = (p, showClub = true) =>
+      `<option value="${escapeHtml(p.uid)}">${escapeHtml(playerName(p))} (${escapeHtml(
+        showClub ? clubNameOf(p) : p.positions
+      )}, ${p.minutes}m)</option>`;
+
+    els.dialogCompareSelect.innerHTML = [
+      `<option value="">No comparison</option>`,
+      ...hullPool.map((h) => fmtOpt(h, false)),
+      ...(hullOther.length
+        ? [`<optgroup label="Managed Squad (Other Pos)">${hullOther.map((h) => fmtOpt(h, false)).join("")}</optgroup>`]
+        : []),
+      ...(pinnedCmp ? [`<optgroup label="Pinned">${fmtOpt(pinnedCmp)}</optgroup>`] : []),
+      ...(extraCompare.length
+        ? [`<optgroup label="Selected">${extraCompare.map((e) => fmtOpt(e)).join("")}</optgroup>`]
+        : []),
+      ...(shortlistCompare.length
+        ? [`<optgroup label="Shortlisted">${shortlistCompare.map((s) => fmtOpt(s)).join("")}</optgroup>`]
+        : []),
+      ...(searchMatches.length
+        ? [`<optgroup label="Search Matches">${searchMatches.map((m) => fmtOpt(m)).join("")}</optgroup>`]
+        : []),
+    ].join("");
+
+    if (searchMatches.length && q) {
+      els.dialogCompareSelect.value = searchMatches[0].uid;
+    } else if (curVal && [...els.dialogCompareSelect.options].some((o) => o.value === curVal)) {
+      els.dialogCompareSelect.value = curVal;
+    }
+  };
+
+  rebuildCompareOptions("");
 
   const benchUid = els.benchmark.value;
-  if (pinnedCmp) {
+  if (
+    prevCompare !== undefined &&
+    prevCompare !== player.uid &&
+    (prevCompare === "" || [...els.dialogCompareSelect.options].some((o) => o.value === prevCompare))
+  ) {
+    els.dialogCompareSelect.value = prevCompare;
+  } else if (pinnedCmp) {
     els.dialogCompareSelect.value = pinnedCmp.uid;
-  } else if (benchUid && benchUid !== player.uid) {
+  } else if (benchUid && benchUid !== player.uid && [...els.dialogCompareSelect.options].some((o) => o.value === benchUid)) {
     els.dialogCompareSelect.value = benchUid;
   }
 
   const scalar = readScalarFilters();
   const baseline = getBaselinePool(dataset, scalar.minMins, scalar.minRep, scalar.dynamicPct);
+  const displayMetrics = getProfileDisplayMetrics(dataset);
+  const playerByUid = new Map(dataset.players.map((p) => [p.uid, p]));
+  for (const h of hullOther) {
+    if (!playerByUid.has(h.uid)) playerByUid.set(h.uid, h);
+  }
+
+  const renderMetricRows = (cmp) => {
+    if (els.dialogCompareLegend) {
+      if (cmp) {
+        els.dialogCompareLegend.textContent = `vs ${playerName(cmp)}`;
+        els.dialogCompareLegend.hidden = false;
+      } else {
+        els.dialogCompareLegend.hidden = true;
+      }
+    }
+    els.dialogStatsList.innerHTML = displayMetrics
+      .map((m) => {
+        const pct = getPlayerMetricPct(player, m.key, dataset, baseline);
+        const cmpHtml = cmp
+          ? (() => {
+              const cmpPct = getPlayerMetricPct(cmp, m.key, dataset, baseline);
+              return `<span class="stat-cmp-val">vs ${formatStat(m.key, cmp[m.key])} <span class="pct-pill ${pctClass(cmpPct)}">${cmpPct}</span></span>`;
+            })()
+          : "";
+        return `
+          <div class="stat-row">
+            <span>${escapeHtml(m.label)}</span>
+            <div class="stat-vals">
+              <strong>${formatStat(m.key, player[m.key])}</strong>
+              <span class="pct-pill ${pctClass(pct)}">${pct}</span>
+              ${cmpHtml}
+            </div>
+            <div class="stat-bar-wrap"><div class="stat-bar-fill ${pctClass(pct)}" style="width:${pct}%"></div></div>
+          </div>
+        `;
+      })
+      .join("");
+  };
 
   const drawCompare = () => {
     const cid = els.dialogCompareSelect.value;
-    const cmp =
-      hullPool.find((h) => h.uid === cid) ||
-      hullOther.find((h) => h.uid === cid) ||
-      (pinnedCmp?.uid === cid ? pinnedCmp : null) ||
-      shortlistCompare.find((s) => s.uid === cid) ||
-      null;
+    const cmp = cid ? playerByUid.get(cid) || null : null;
     const clubLabel = cmp?.is_hull && season === state.season ? state.meta?.club_short_name || "Club" : clubNameOf(cmp);
     renderRadar(player, cmp, dataset, baseline, clubLabel);
+    renderMetricRows(cmp);
   };
   els.dialogCompareSelect.onchange = drawCompare;
+  if (els.dialogCompareSearch) {
+    els.dialogCompareSearch.oninput = () => {
+      rebuildCompareOptions(els.dialogCompareSearch.value);
+      drawCompare();
+    };
+  }
 
-  els.dialogStatsList.innerHTML = (dataset.metrics || [])
-    .map((m) => {
-      const pct = getPlayerMetricPct(player, m.key, dataset, baseline);
-      return `
-        <div class="stat-row">
-          <span>${escapeHtml(m.label)}</span>
-          <strong>${formatStat(m.key, player[m.key])}</strong>
-          <span class="pct-pill ${pctClass(pct)}">${pct}</span>
-          <div class="stat-bar-wrap"><div class="stat-bar-fill" style="width:${pct}%"></div></div>
-        </div>
-      `;
-    })
-    .join("");
-
+  renderMetricRows(null);
   els.progressionChart.hidden = true;
+  if (els.dialogProgressionMetric) {
+    els.dialogProgressionMetric.value = "";
+    els.dialogProgressionMetric.hidden = true;
+  }
   els.dialogProgressionEmpty.hidden = true;
   els.playerDialog.showModal();
 
@@ -219,6 +332,7 @@ export function toggleRowShortlist(player, position = state.pos, season = state.
   const name = playerName(player);
   if (state.shortlist[uid]) {
     delete state.shortlist[uid];
+    state.shortlistCompareUids.delete(uid);
     saveShortlist();
     window.dispatchEvent(new Event("moneyball:shortlist-changed"));
     showToast(`Removed ${name} from shortlist`);
@@ -227,6 +341,9 @@ export function toggleRowShortlist(player, position = state.pos, season = state.
   state.shortlist[uid] = {
     uid,
     name: player.name ?? "",
+    img_id: player.img_id ?? "",
+    club_uid: player.club_uid ?? "",
+    club_img_id: player.club_img_id ?? "",
     club: clubNameOf(player),
     league: player.league ?? "",
     nation: player.nation ?? "",
@@ -259,6 +376,9 @@ function enrichShortlistEntry(entry) {
   if (!cachedMatch) return entry;
   return {
     ...entry,
+    img_id: cachedMatch.img_id ?? entry.img_id,
+    club_uid: cachedMatch.club_uid ?? entry.club_uid,
+    club_img_id: cachedMatch.club_img_id ?? entry.club_img_id,
     club: clubNameOf(cachedMatch),
     league: cachedMatch.league ?? entry.league,
     age: cachedMatch.age ?? entry.age,
@@ -275,8 +395,16 @@ function enrichShortlistEntry(entry) {
 export function filteredShortlist() {
   const position = els.shortlistPosition.value;
   const sortBy = els.shortlistSort?.value || "added";
+  const query = normalizeSearchText(els.shortlistSearch?.value);
   const saved = Object.values(state.shortlist).map(enrichShortlistEntry);
-  const list = position ? saved.filter((player) => parsePlayerPositions(player.positions).includes(position)) : saved;
+  const list = saved.filter((player) => {
+    if (position && !parsePlayerPositions(player.positions).includes(position)) return false;
+    if (query) {
+      const hay = normalizeSearchText(`${player.name ?? ""} ${player.club ?? ""} ${player.league ?? ""} ${player.note ?? ""}`);
+      if (!hay.includes(query)) return false;
+    }
+    return true;
+  });
   if (sortBy === "score") {
     list.sort((a, b) => (Number(b.active_score) || -1) - (Number(a.active_score) || -1) || collator.compare(playerName(a), playerName(b)));
   } else if (sortBy === "value") {
@@ -295,6 +423,32 @@ export function filteredShortlist() {
   return list;
 }
 
+export function updateShortlistCompareButton() {
+  if (!els.btnShortlistCompare) return;
+  const cnt = state.shortlistCompareUids.size;
+  els.btnShortlistCompare.textContent = `Compare Selected (${cnt})`;
+  els.btnShortlistCompare.hidden = cnt < 2;
+}
+
+export async function refreshShortlistDatasets(loadPositionFn) {
+  if (!loadPositionFn) return;
+  const groups = [...new Set(Object.values(state.shortlist).map((p) => p.pos_group).filter(Boolean))];
+  let loadedAny = false;
+  await Promise.all(
+    groups.map(async (grp) => {
+      const key = `${state.season || "latest"}:${grp}`;
+      if (state.cache.has(key)) return;
+      try {
+        await loadPositionFn(grp, state.season);
+        loadedAny = true;
+      } catch {
+        // Ignore unavailable position dataset
+      }
+    })
+  );
+  if (loadedAny && els.shortlistDialog?.open) renderShortlist();
+}
+
 export function renderShortlist() {
   const saved = Object.values(state.shortlist);
   const positions = [...new Set(saved.flatMap((player) => parsePlayerPositions(player.positions)))].sort(collator.compare);
@@ -306,22 +460,36 @@ export function renderShortlist() {
   const items = filteredShortlist();
   els.btnExportShortlist.disabled = !items.length;
   els.btnClearShortlist.disabled = !saved.length;
-  els.shortlistBody.innerHTML = items.length ? items.map((player) => {
-    const scorePill =
-      player.active_score != null && Number.isFinite(Number(player.active_score))
-        ? `<span class="pct-pill ${pctClass(Math.round(Number(player.active_score)))}">${Number(player.active_score).toFixed(1)}</span>`
-        : "";
-    return `
+  updateShortlistCompareButton();
+
+  els.shortlistBody.innerHTML = items.length
+    ? items
+        .map((player) => {
+          const scorePill =
+            player.active_score != null && Number.isFinite(Number(player.active_score))
+              ? `<span class="pct-pill ${pctClass(Math.round(Number(player.active_score)))}">${Number(player.active_score).toFixed(1)}</span>`
+              : "";
+          const isCmp = state.shortlistCompareUids.has(player.uid);
+          const posTag = player.pos_group ? `<span class="score-default-tag">${escapeHtml(player.pos_group)}</span>` : "";
+          return `
     <div class="shortlist-item" data-uid="${escapeHtml(player.uid)}">
+      <div class="shortlist-item-check">
+        <input type="checkbox" class="shortlist-compare-cb" data-uid="${escapeHtml(player.uid)}" ${
+            isCmp ? "checked" : ""
+          } ${player.pos_group ? "" : "disabled"} title="Select to compare" aria-label="Select ${escapeHtml(playerName(player))} to compare">
+        <img class="tab-avatar" src="${personImgUrl(player)}" alt="" width="34" height="34" loading="lazy" decoding="async">
+      </div>
       <div class="shortlist-item-main">
         <div class="shortlist-item-title">
           <button type="button" class="player-link" data-action="profile">${escapeHtml(playerName(player))}</button>
           ${scorePill}
-          <span>· ${escapeHtml(clubNameOf(player))} · Age ${escapeHtml(player.age ?? "?")} · ${escapeHtml(parsePlayerPositions(player.positions).join(", ") || "—")}</span>
+          ${posTag}
+          <img class="tab-crest" src="${clubImgUrl(player.club_img_id || player.club_uid, clubNameOf(player))}" alt="" width="16" height="16" loading="lazy" decoding="async">
+          <span>${escapeHtml(clubNameOf(player))} · Age ${escapeHtml(player.age ?? "?")} · ${escapeHtml(parsePlayerPositions(player.positions).join(", ") || "—")}</span>
         </div>
         <div class="subtitle">Mins ${escapeHtml(player.minutes ?? "—")} · Value ${escapeHtml(formatPlayerValue(player))} · Wage ${
-          player.wage == null ? "—" : `${formatMoney(player.wage)}/wk`
-        } · Contract ${escapeHtml(player.contract_end || "—")}</div>
+            player.wage == null ? "—" : `${formatMoney(player.wage)}/wk`
+          } · Contract ${escapeHtml(player.contract_end || "—")}</div>
         <input type="text" class="shortlist-note-input" data-action="note" placeholder="Add scout note..." aria-label="Scout note for ${escapeHtml(playerName(player))}" value="${escapeHtml(player.note || "")}">
       </div>
       <div class="dialog-head-actions">
@@ -330,29 +498,35 @@ export function renderShortlist() {
       </div>
     </div>
   `;
-  }).join("") : '<p class="subtitle">No players shortlisted yet. Select the star next to a player to add them.</p>';
+        })
+        .join("")
+    : `<p class="subtitle">${
+        saved.length
+          ? "No shortlisted players match your search or position filter."
+          : "No players shortlisted yet. Select the star next to a player to add them."
+      }</p>`;
 }
 
-export async function openShortlistedPlayer(saved, button, loadPositionFn) {
+export async function openShortlistedPlayer(saved, button, loadPositionFn, options = {}) {
   if (saved.profile) {
-    openPlayerDialog(saved.profile, null, saved.season, loadPositionFn);
+    openPlayerDialog(saved.profile, null, saved.season, loadPositionFn, options);
     return;
   }
-  button.disabled = true;
+  if (button) button.disabled = true;
   const seasons = new Set([state.season, saved.season ?? state.season, ...state.seasons.map((entry) => entry.season)]);
   try {
     for (const season of seasons) {
       const dataset = await loadPositionFn(saved.pos_group, season).catch(() => null);
-      if (!els.shortlistDialog.open || !button.isConnected || els.playerDialog.open) return;
+      if (button && (!els.shortlistDialog.open || !button.isConnected || els.playerDialog.open)) return;
       const player = dataset?.players.find((row) => row.uid === saved.uid);
       if (player) {
-        button.disabled = false;
-        openPlayerDialog(player, dataset, season, loadPositionFn);
+        if (button) button.disabled = false;
+        openPlayerDialog(player, dataset, season, loadPositionFn, options);
         return;
       }
     }
     showToast("Player unavailable in the saved archive");
   } finally {
-    button.disabled = false;
+    if (button) button.disabled = false;
   }
 }

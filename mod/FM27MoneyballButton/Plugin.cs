@@ -22,6 +22,7 @@ public class Plugin : BasePlugin
     private const string DashboardUrl = "http://127.0.0.1:8727/?auto_refresh=1";
     private const int ServerPort = 8727;
     private static int _launching;
+    internal static bool IsLaunching => Volatile.Read(ref _launching) != 0;
 
     public override void Load()
     {
@@ -34,12 +35,15 @@ public class Plugin : BasePlugin
         Logger.LogInfo("FM27 Moneyball Button plugin loaded.");
     }
 
-    private static (string PythonBin, string ServerScript) ResolveServerPaths()
+    private static (string PythonBin, string ServerScript, string Anchor, float OffsetX, float OffsetY) ResolveServerConfig()
     {
         var pluginDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? "";
         var cfgPath = Path.Combine(pluginDir, "moneyball.config.txt");
         string pythonBin = "";
         string serverScript = "";
+        string anchor = "bottom-right";
+        float offsetX = 18f;
+        float offsetY = 18f;
 
         if (File.Exists(cfgPath))
         {
@@ -50,6 +54,14 @@ public class Plugin : BasePlugin
                     pythonBin = line.Substring("python=".Length).Trim();
                 else if (line.StartsWith("server=", StringComparison.OrdinalIgnoreCase))
                     serverScript = line.Substring("server=".Length).Trim();
+                else if (line.StartsWith("anchor=", StringComparison.OrdinalIgnoreCase))
+                    anchor = line.Substring("anchor=".Length).Trim().ToLowerInvariant();
+                else if (line.StartsWith("offset_x=", StringComparison.OrdinalIgnoreCase) &&
+                         float.TryParse(line.Substring("offset_x=".Length).Trim(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var ox))
+                    offsetX = ox;
+                else if (line.StartsWith("offset_y=", StringComparison.OrdinalIgnoreCase) &&
+                         float.TryParse(line.Substring("offset_y=".Length).Trim(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var oy))
+                    offsetY = oy;
             }
         }
 
@@ -66,7 +78,13 @@ public class Plugin : BasePlugin
             pythonBin = File.Exists(venvPy) ? venvPy : "python3";
         }
 
-        return (pythonBin, serverScript);
+        return (pythonBin, serverScript, anchor, offsetX, offsetY);
+    }
+
+    internal static (string Anchor, float OffsetX, float OffsetY) GetButtonPlacement()
+    {
+        var (_, _, anchor, ox, oy) = ResolveServerConfig();
+        return (anchor, ox, oy);
     }
 
     private static void LaunchBrowser()
@@ -95,7 +113,7 @@ public class Plugin : BasePlugin
                 return;
             }
 
-            var (pythonBin, serverScript) = ResolveServerPaths();
+            var (pythonBin, serverScript, _, _, _) = ResolveServerConfig();
             if (!File.Exists(serverScript))
             {
                 Logger.LogError($"Moneyball server script not found: {serverScript}");
@@ -169,6 +187,7 @@ public class MoneyballButtonBehaviour : MonoBehaviour
     private static Texture2D _cachedIconTexture;
     private static bool _iconLoadAttempted;
     private float _nextScanTime;
+    private Button _button;
 
     public MoneyballButtonBehaviour(IntPtr ptr) : base(ptr) { }
 
@@ -219,6 +238,12 @@ public class MoneyballButtonBehaviour : MonoBehaviour
 
     private void Update()
     {
+        if (_button != null && _button.panel != null)
+        {
+            _button.style.opacity = Plugin.IsLaunching ? 0.65f : 1.0f;
+            _button.tooltip = Plugin.IsLaunching ? "Opening Moneyball Scout..." : "Moneyball Scout";
+        }
+
         if (Time.unscaledTime < _nextScanTime)
             return;
         _nextScanTime = Time.unscaledTime + 2.0f;
@@ -238,6 +263,7 @@ public class MoneyballButtonBehaviour : MonoBehaviour
                 var existing = r.Q<Button>("moneyball-launch-btn");
                 if (existing != null)
                 {
+                    _button = existing;
                     existing.BringToFront();
                     return;
                 }
@@ -257,10 +283,17 @@ public class MoneyballButtonBehaviour : MonoBehaviour
                 name = "moneyball-launch-btn",
                 tooltip = "Moneyball Scout",
             };
+            var (anchor, offsetX, offsetY) = Plugin.GetButtonPlacement();
             btn.pickingMode = PickingMode.Position;
             btn.style.position = Position.Absolute;
-            btn.style.right = 18f;
-            btn.style.bottom = 18f;
+            if (anchor.Contains("left"))
+                btn.style.left = offsetX;
+            else
+                btn.style.right = offsetX;
+            if (anchor.Contains("top"))
+                btn.style.top = offsetY;
+            else
+                btn.style.bottom = offsetY;
             btn.style.width = 40f;
             btn.style.height = 40f;
             btn.style.paddingLeft = 3f;
@@ -298,6 +331,7 @@ public class MoneyballButtonBehaviour : MonoBehaviour
             }
 
             root.Add(btn);
+            _button = btn;
             btn.BringToFront();
             Plugin.Logger.LogInfo($"Injected Moneyball button into UIDocument '{bestDoc.name}' (sortingOrder={bestDoc.sortingOrder}, totalDocs={docs.Length}).");
         }

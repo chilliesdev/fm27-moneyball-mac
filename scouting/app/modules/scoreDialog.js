@@ -55,6 +55,9 @@ export function renderScoreDialog() {
   const enabledItems = cfg.metrics.filter((m) => m.enabled);
   const totalWeight = enabledItems.reduce((s, m) => s + m.weight, 0);
   els.scoreTotalWeight.textContent = `Enabled: ${enabledItems.length} · Total weight: ${totalWeight.toFixed(1)}`;
+  if (els.scoreUnsavedBadge) {
+    els.scoreUnsavedBadge.hidden = cfg.roleSlug !== "__custom_draft__";
+  }
 
   const query = els.scoreMetricSearch.value.trim().toLowerCase();
   const catFilter = els.scoreCategoryFilter.value;
@@ -106,16 +109,18 @@ export function renderScoreDialog() {
       const isDefault = catalog.defaultKeys.has(catMeta.key);
       html.push(`
         <div class="score-metric-row ${cfgItem.enabled ? "" : "is-disabled"}" data-key="${escapeHtml(catMeta.key)}">
-          <input type="checkbox" class="score-enable-cb" ${cfgItem.enabled ? "checked" : ""} aria-label="Enable ${escapeHtml(catMeta.label)}">
-          <div class="score-metric-name">
-            <span>${escapeHtml(catMeta.label)}</span>
-            ${isDefault ? `<span class="score-default-tag">Default</span>` : ""}
-          </div>
+          <label class="score-metric-label">
+            <input type="checkbox" class="score-enable-cb" ${cfgItem.enabled ? "checked" : ""} aria-label="Enable ${escapeHtml(catMeta.label)}">
+            <span class="score-metric-name">
+              <span>${escapeHtml(catMeta.label)}</span>
+              ${isDefault ? `<span class="score-default-tag">Default</span>` : ""}
+            </span>
+          </label>
           <button type="button" class="score-dir-btn" aria-pressed="${cfgItem.higher_is_better}" title="Toggle scoring direction">
             ${cfgItem.higher_is_better ? "Higher ↑" : "Lower ↓"}
           </button>
           <div class="score-weight-controls">
-            <input type="range" class="score-weight-slider" min="0" max="5" step="0.5" value="${cfgItem.weight}" ${cfgItem.enabled ? "" : "disabled"} aria-label="${escapeHtml(catMeta.label)} weight slider">
+            <input type="range" class="score-weight-slider" min="0" max="5" step="0.1" value="${cfgItem.weight}" ${cfgItem.enabled ? "" : "disabled"} aria-label="${escapeHtml(catMeta.label)} weight slider">
             <input type="number" class="score-weight-num" min="0" max="5" step="0.1" value="${cfgItem.weight}" ${cfgItem.enabled ? "" : "disabled"} aria-label="${escapeHtml(catMeta.label)} weight value">
             <span class="score-share-badge">${share}%</span>
           </div>
@@ -161,6 +166,9 @@ function updateScoreSharesInPlace(dataset) {
   const enabledItems = cfg.metrics.filter((m) => m.enabled);
   const totalWeight = enabledItems.reduce((s, m) => s + m.weight, 0);
   els.scoreTotalWeight.textContent = `Enabled: ${enabledItems.length} · Total weight: ${totalWeight.toFixed(1)}`;
+  if (els.scoreUnsavedBadge) {
+    els.scoreUnsavedBadge.hidden = cfg.roleSlug !== "__custom_draft__";
+  }
   const cfgByKey = new Map(cfg.metrics.map((m) => [m.key, m]));
   els.scoreMetricsList.querySelectorAll(".score-metric-row").forEach((row) => {
     const item = cfgByKey.get(row.dataset.key);
@@ -177,13 +185,17 @@ function markScoreCustomDraft() {
   const dataset = activeDataset();
   if (!dataset || !state.scoreConfig) return;
   state.scoreConfig.roleSlug = "__custom_draft__";
-  state.scoreConfig.presetId = null;
   state.customDrafts[dataset.position] = state.scoreConfig;
   refreshRoleSelectOptions(dataset, "__custom_draft__");
-  els.scorePresetSelect.value = "";
-  if (els.scoreUpdatePresetBtn) els.scoreUpdatePresetBtn.disabled = true;
-  els.scoreRenamePresetBtn.disabled = true;
-  els.scoreDeletePresetBtn.disabled = true;
+  const presets = getPosPresets(dataset.position);
+  const hasActivePreset = Boolean(state.scoreConfig.presetId && presets.some((p) => p.id === state.scoreConfig.presetId));
+  els.scorePresetSelect.value = hasActivePreset ? state.scoreConfig.presetId : "";
+  if (els.scoreUnsavedBadge) {
+    els.scoreUnsavedBadge.hidden = state.scoreConfig.roleSlug !== "__custom_draft__";
+  }
+  if (els.scoreUpdatePresetBtn) els.scoreUpdatePresetBtn.disabled = !hasActivePreset;
+  els.scoreRenamePresetBtn.disabled = !hasActivePreset;
+  els.scoreDeletePresetBtn.disabled = !hasActivePreset;
 }
 
 function flushScoreDialogChanges(onRefresh) {
@@ -200,8 +212,29 @@ export function wireScoreDialogEvents(onRefresh, onOpenPlayer = null) {
 
   els.btnCustomizeScore.addEventListener("click", () => {
     state.scoreDialogDirty = false;
+    state.scoreDialogSnapshot = state.scoreConfig
+      ? {
+          config: structuredClone(state.scoreConfig),
+          hadDraft: Boolean(state.customDrafts[state.pos]),
+          draft: state.customDrafts[state.pos] ? structuredClone(state.customDrafts[state.pos]) : null,
+        }
+      : null;
     renderScoreDialog();
     els.scoreDialog.showModal();
+  });
+
+  els.scoreCancelBtn?.addEventListener("click", () => {
+    const snap = state.scoreDialogSnapshot;
+    const dataset = activeDataset();
+    if (snap && dataset) {
+      state.scoreConfig = snap.config;
+      if (snap.hadDraft && snap.draft) state.customDrafts[dataset.position] = snap.draft;
+      else delete state.customDrafts[dataset.position];
+      refreshRoleSelectOptions(dataset, state.scoreConfig.roleSlug);
+    }
+    state.scoreDialogDirty = false;
+    state.scoreDialogSnapshot = null;
+    els.scoreDialog.close();
   });
 
   els.scoreCloseBtn.addEventListener("click", () => {
@@ -209,6 +242,7 @@ export function wireScoreDialogEvents(onRefresh, onOpenPlayer = null) {
   });
 
   els.scoreDialog.addEventListener("close", () => {
+    state.scoreDialogSnapshot = null;
     flushScoreDialogChanges(onRefresh);
   });
 
@@ -235,8 +269,8 @@ export function wireScoreDialogEvents(onRefresh, onOpenPlayer = null) {
     els.scoreMethodHint.textContent = METHOD_HINTS[state.scoreConfig.method] || "";
     const dataset = activeDataset();
     if (dataset) {
-      if (state.scoreConfig.roleSlug === "__custom_draft__") {
-        state.customDrafts[dataset.position] = state.scoreConfig;
+      if (state.scoreConfig.presetId || state.scoreConfig.roleSlug === "__custom_draft__") {
+        markScoreCustomDraft();
       }
       renderScorePreview(dataset);
     }
@@ -351,6 +385,7 @@ export function wireScoreDialogEvents(onRefresh, onOpenPlayer = null) {
     if (!dataset) return;
     const id = els.scorePresetSelect.value;
     if (!id) {
+      if (state.scoreConfig) state.scoreConfig.presetId = null;
       if (els.scoreUpdatePresetBtn) els.scoreUpdatePresetBtn.disabled = true;
       els.scoreRenamePresetBtn.disabled = true;
       els.scoreDeletePresetBtn.disabled = true;
@@ -412,6 +447,7 @@ export function wireScoreDialogEvents(onRefresh, onOpenPlayer = null) {
     preset.method = state.scoreConfig.method || "percentile";
     preset.metrics = enabledMetrics;
     savePresets();
+    delete state.customDrafts[dataset.position];
     state.scoreConfig = buildScoreConfigFromRole(dataset, `custom:${id}`);
     refreshRoleSelectOptions(dataset, `custom:${id}`);
     renderScoreDialog();

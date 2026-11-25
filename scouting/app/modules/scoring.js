@@ -282,6 +282,12 @@ export function computePoolRows(dataset, scalar, matchesFn) {
 
   const pctKeys = new Set(dataset.metrics.map((m) => m.key));
   for (const item of enabledItems) pctKeys.add(item.key);
+  const colPrefs = state.colPrefs?.[dataset.position];
+  if (colPrefs) {
+    for (const [k, vis] of Object.entries(colPrefs)) {
+      if (vis && catalog.byKey.has(k)) pctKeys.add(k);
+    }
+  }
 
   const dists = new Map();
   for (const k of pctKeys) {

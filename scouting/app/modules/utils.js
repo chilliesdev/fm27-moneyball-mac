@@ -13,11 +13,19 @@ export function playerName(p) {
   return p?.name || `Player #${p?.uid ?? "?"}`;
 }
 
-export async function copyPlayerName(player) {
+export async function copyPlayerName(player, button = null) {
   if (!player?.name) return;
   try {
     await navigator.clipboard.writeText(player.name);
     showToast(`Copied "${player.name}"`);
+    if (button) {
+      const prev = button.textContent;
+      button.textContent = "Copied!";
+      clearTimeout(button._copyTimer);
+      button._copyTimer = setTimeout(() => {
+        if (button.isConnected) button.textContent = prev;
+      }, 1500);
+    }
   } catch {
     showToast("Copy failed");
   }
@@ -166,9 +174,16 @@ export function enableLightDismissFallback(dialog) {
   });
 }
 
+export function isDarkColorScheme() {
+  const meta = document.querySelector('meta[name="color-scheme"]')?.content;
+  if (meta === "dark") return true;
+  if (meta === "light") return false;
+  return window.matchMedia("(prefers-color-scheme: dark)").matches;
+}
+
 export function getThemeColors() {
   const cs = getComputedStyle(document.documentElement);
-  const isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  const isDark = isDarkColorScheme();
   const mode = isDark ? "dark" : "light";
   const read = (prop) => cs.getPropertyValue(`--${prop}-${mode}`).trim();
   return {

@@ -71,7 +71,7 @@ export function matchesPlayer(p, scalar, omitFacet = null) {
   if (!p.is_hull && p.minutes < scalar.minMins) return false;
   if (p.is_hull && p.minutes < 300) return false;
   if (scalar.hasRep && !p.is_hull && p.club_rep < scalar.minRep) return false;
-  if (scalar.minimums.some(({ field, value }) => !Number.isFinite(p[field]) || p[field] < value)) {
+  if (!p.is_hull && scalar.minimums.some(({ field, value }) => !Number.isFinite(p[field]) || p[field] < value)) {
     return false;
   }
   if (!p.is_hull && scalar.maxAge < 99 && (p.age === null || p.age === undefined || p.age > scalar.maxAge)) {
@@ -273,11 +273,26 @@ export function renderFacetOptions(facetName, dataset) {
     const order = new Map(POSITION_TOKENS.map((t, i) => [t, i]));
     entries.sort((a, b) => (order.get(a.value) ?? 99) - (order.get(b.value) ?? 99));
   } else if (facetName !== "feet" && facetName !== "statuses") {
-    entries.sort((a, b) => {
-      if (a.isSelected !== b.isSelected) return a.isSelected ? -1 : 1;
-      if (b.count !== a.count) return b.count - a.count;
-      return collator.compare(a.label, b.label);
-    });
+    let snapOrder = state.popoverOrderSnapshots.get(facetName);
+    if (!snapOrder) {
+      entries.sort((a, b) => {
+        if (a.isSelected !== b.isSelected) return a.isSelected ? -1 : 1;
+        if (b.count !== a.count) return b.count - a.count;
+        return collator.compare(a.label, b.label);
+      });
+      snapOrder = new Map(entries.map((e, idx) => [e.value, idx]));
+      state.popoverOrderSnapshots.set(facetName, snapOrder);
+    } else {
+      entries.sort((a, b) => {
+        const ia = snapOrder.get(a.value);
+        const ib = snapOrder.get(b.value);
+        if (ia !== undefined && ib !== undefined) return ia - ib;
+        if (ia !== undefined) return -1;
+        if (ib !== undefined) return 1;
+        if (b.count !== a.count) return b.count - a.count;
+        return collator.compare(a.label, b.label);
+      });
+    }
   }
 
   const renderLimit = facetName === "clubs" ? state.clubOptionLimit : entries.length;
@@ -420,6 +435,7 @@ export function captureViewSnapshot() {
     scoreMethod: state.scoreConfig?.method || "percentile",
     customScore,
     sort: sorters,
+    benchmark: els.benchmark?.value ?? "",
     scatterX: els.scatterX.value,
     scatterY: els.scatterY.value,
   };
@@ -506,6 +522,9 @@ export async function applyViewSnapshot(snap, selectPositionFn, refreshFn) {
       els.role.value = snap.role;
     }
   }
+  if (snap.benchmark !== undefined && els.benchmark && [...els.benchmark.options].some((o) => o.value === snap.benchmark)) {
+    els.benchmark.value = snap.benchmark;
+  }
   if (snap.scatterX && [...els.scatterX.options].some((o) => o.value === snap.scatterX)) {
     els.scatterX.value = snap.scatterX;
   }
@@ -561,14 +580,16 @@ export function renderActiveFilterChips(dataset, onRefresh) {
     chips.push({
       type: "scalar",
       id: "maxAge",
-      label: els.maxAge.value === "99" ? "Max Age: Any" : `Max Age: ≤ ${els.maxAge.value}`,
+      relaxed: els.maxAge.value === "99",
+      label: els.maxAge.value === "99" ? "No Age Cap" : `Max Age: ≤ ${els.maxAge.value}`,
     });
   }
   if (els.maxVal.value !== DEFAULT_FILTERS.maxVal) {
     chips.push({
       type: "scalar",
       id: "maxVal",
-      label: els.maxVal.value === "999999999" ? "Max Value: Any" : `Max Value: ≤ ${formatMoney(els.maxVal.value)}`,
+      relaxed: els.maxVal.value === "999999999",
+      label: els.maxVal.value === "999999999" ? "No Value Cap" : `Max Value: ≤ ${formatMoney(els.maxVal.value)}`,
     });
   }
   if (els.maxWage.value !== DEFAULT_FILTERS.maxWage) {
@@ -582,7 +603,8 @@ export function renderActiveFilterChips(dataset, onRefresh) {
     chips.push({
       type: "scalar",
       id: "minRep",
-      label: els.minRep.value === "0" ? "Min Rep: All" : `Min Rep: ${els.minRep.value}+`,
+      relaxed: els.minRep.value === "0",
+      label: els.minRep.value === "0" ? "All Reputations" : `Min Rep: ${els.minRep.value}+`,
     });
   }
   if (els.dynamicPct.checked !== DEFAULT_FILTERS.dynamicPct) {
@@ -603,7 +625,8 @@ export function renderActiveFilterChips(dataset, onRefresh) {
   els.activeFiltersBar.hidden = false;
   els.activeFiltersChips.innerHTML = chips
     .map((c, idx) => {
-      return `<button type="button" class="chip-btn" data-chip-idx="${idx}" aria-label="Remove ${escapeHtml(
+      const cls = c.relaxed ? "chip-btn is-relaxed" : "chip-btn";
+      return `<button type="button" class="${cls}" data-chip-idx="${idx}" aria-label="Remove ${escapeHtml(
         c.label
       )} filter"><span>${escapeHtml(c.label)}</span><span class="chip-x" aria-hidden="true">×</span></button>`;
     })
@@ -670,7 +693,7 @@ export function positionPopoverFallback(popover, trigger) {
   const popH = popRect.height || 300;
 
   let left = rect.left;
-  if (popover.id === "column-chooser-popover") {
+  if (popover.id === "column-chooser-popover" || popover.id === "pop-saved-views") {
     left = rect.right - popW;
   }
   left = Math.max(8, Math.min(window.innerWidth - popW - 8, left));
@@ -689,12 +712,19 @@ export function wirePopoverBehaviors({ onRefresh, onOpenColumnChooser }) {
   const allPopovers = [
     ...Object.values(FACETS).map((f) => ({ popover: f.popover, trigger: f.trigger, facet: f })),
     { popover: els.columnChooserPopover, trigger: els.btnColumnChooser, facet: null },
+    ...(els.popSavedViews && els.btnViewsMenu
+      ? [{ popover: els.popSavedViews, trigger: els.btnViewsMenu, facet: null }]
+      : []),
   ];
 
   for (const { popover, trigger, facet } of allPopovers) {
     popover.addEventListener("toggle", (ev) => {
       const isOpen = ev.newState === "open";
       trigger.setAttribute("aria-expanded", String(isOpen));
+      if (!isOpen && facet) {
+        state.popoverOrderSnapshots.delete(popover.dataset.facet);
+        return;
+      }
       if (isOpen) {
         if (popover === els.columnChooserPopover) {
           onOpenColumnChooser();
@@ -702,6 +732,7 @@ export function wirePopoverBehaviors({ onRefresh, onOpenColumnChooser }) {
           const ds = activeDataset();
           if (ds) {
             const name = popover.dataset.facet;
+            state.popoverOrderSnapshots.delete(name);
             const input = popover.querySelector(".popover-search");
             if (input) input.value = "";
             if (name === "clubs") state.clubOptionLimit = CLUB_PAGE_SIZE;
@@ -710,7 +741,7 @@ export function wirePopoverBehaviors({ onRefresh, onOpenColumnChooser }) {
         }
         requestAnimationFrame(() => {
           positionPopoverFallback(popover, trigger);
-          const searchEl = popover.querySelector(".popover-search");
+          const searchEl = popover.querySelector(".popover-search, .view-name-input");
           if (searchEl) searchEl.focus();
         });
       }

@@ -8,6 +8,7 @@ import {
   formatPlayerValue,
   formatStat,
   getThemeColors,
+  parsePlayerPositions,
   personImgUrl,
   playerName,
 } from "./utils.js";
@@ -122,17 +123,21 @@ export function renderScatter(dataset, onPlayerClick) {
     if (y > maxY) maxY = y;
 
     const isBench = p.uid === benchUid;
+    const isShortlisted = Boolean(state.shortlist[p.uid]);
     const pt = {
       value: [x, y],
       player: p,
       isBench,
+      isShortlisted,
     };
     if (p.is_hull) {
       pt.itemStyle = isBench
         ? { borderColor: theme.text, borderWidth: 2.5 }
-        : { borderColor: theme.surface, borderWidth: 1.5 };
+        : isShortlisted
+          ? { borderColor: "#16a34a", borderWidth: 2.5 }
+          : { borderColor: theme.surface, borderWidth: 1.5 };
       hull.push(pt);
-    } else if (state.shortlist[p.uid]) {
+    } else if (isShortlisted) {
       pt.itemStyle = { borderColor: theme.surface, borderWidth: 1.5 };
       shortlisted.push(pt);
     } else {
@@ -143,6 +148,19 @@ export function renderScatter(dataset, onPlayerClick) {
   const totalCount = others.length + hull.length + shortlisted.length;
   const avgX = totalCount ? sumX / totalCount : 0;
   const avgY = totalCount ? sumY / totalCount : 0;
+  let eliteCount = 0;
+  if (totalCount) {
+    const checkElite = (pt) => {
+      const [x, y] = pt.value;
+      const okX = xMeta.higher_is_better ? x >= avgX : x <= avgX;
+      const okY = yMeta.higher_is_better ? y >= avgY : y <= avgY;
+      if (okX && okY) eliteCount += 1;
+    };
+    others.forEach(checkElite);
+    hull.forEach(checkElite);
+    shortlisted.forEach(checkElite);
+  }
+  state.lastScatterEliteCount = eliteCount;
   if (!totalCount) {
     minX = 0;
     maxX = 1;
@@ -198,6 +216,7 @@ export function renderScatter(dataset, onPlayerClick) {
   const markOwnerIdx = others.length > 0 ? 0 : hull.length > 0 ? 1 : shortlisted.length > 0 ? 2 : -1;
   const clubLabel = state.meta?.club_short_name || "Managed Club";
 
+  const poolOpacity = others.length > 1500 ? 0.58 : others.length > 500 ? 0.72 : 0.88;
   const option = {
     animationDuration: 220,
     grid: { left: 60, right: 28, top: 44, bottom: 48 },
@@ -231,6 +250,7 @@ export function renderScatter(dataset, onPlayerClick) {
         if (!p) return "";
         const name = escapeHtml(playerName(p));
         const club = escapeHtml(clubNameOf(p));
+        const posStr = escapeHtml(parsePlayerPositions(p.positions).join(", ") || "—");
         return `
           <div class="scatter-tt">
             <div class="scatter-tt-head">
@@ -243,11 +263,14 @@ export function renderScatter(dataset, onPlayerClick) {
                 </span>
               </div>
             </div>
+            <div>Pos: ${posStr} · Mins: ${escapeHtml(p.minutes ?? "—")}</div>
             <div>
               ${escapeHtml(xMeta.label)}: <strong>${formatStat(xKey, p[xKey])}</strong><br>
               ${escapeHtml(yMeta.label)}: <strong>${formatStat(yKey, p[yKey])}</strong>
             </div>
-            <div>Value: ${escapeHtml(formatPlayerValue(p))} · Score: <strong>${Number(p.active_score ?? 0).toFixed(1)}</strong></div>
+            <div>Value: ${escapeHtml(formatPlayerValue(p))} · Score: <strong>${Number(p.active_score ?? 0).toFixed(1)}</strong>${
+              params?.data?.isShortlisted ? ' · <strong style="color:#16a34a">★ Shortlisted</strong>' : ""
+            }</div>
           </div>
         `;
       },
@@ -280,8 +303,8 @@ export function renderScatter(dataset, onPlayerClick) {
         largeThreshold: 2000,
         progressive: 0,
         symbolSize: 8,
-        itemStyle: { color: theme.poolDot, opacity: 0.9 },
-        emphasis: { disabled: true },
+        itemStyle: { color: theme.poolDot, opacity: poolOpacity },
+        emphasis: { scale: 1.5, itemStyle: { opacity: 1, borderColor: theme.text, borderWidth: 1.5 } },
         z: 2,
         data: others,
         markLine: markOwnerIdx === 0 ? markLine : undefined,
@@ -291,7 +314,7 @@ export function renderScatter(dataset, onPlayerClick) {
         name: clubLabel,
         type: "scatter",
         large: false,
-        emphasis: { disabled: true },
+        emphasis: { scale: 1.35 },
         symbol: "diamond",
         symbolSize: (val, params) => (params?.data?.isBench ? 15 : 12),
         itemStyle: { color: theme.accent, opacity: 1 },
@@ -313,7 +336,7 @@ export function renderScatter(dataset, onPlayerClick) {
         name: "Shortlisted",
         type: "scatter",
         large: false,
-        emphasis: { disabled: true },
+        emphasis: { scale: 1.35 },
         symbol: "triangle",
         symbolSize: 11,
         itemStyle: { color: "#16a34a", opacity: 1 },
@@ -328,6 +351,21 @@ export function renderScatter(dataset, onPlayerClick) {
   state.scatterChart.setOption(option, { notMerge: true });
 }
 
+export function getProfileDisplayMetrics(dataset) {
+  const catalog = getMetricCatalog(dataset);
+  const base = [...(dataset.metrics || [])];
+  const seen = new Set(base.map((m) => m.key));
+  const cfg = dataset.position === state.pos ? state.scoreConfig : null;
+  for (const item of cfg?.metrics || []) {
+    if (!item.enabled || seen.has(item.key)) continue;
+    const cat = catalog.byKey.get(item.key);
+    if (!cat) continue;
+    seen.add(item.key);
+    base.push(cat);
+  }
+  return base;
+}
+
 export function renderRadar(player, comparePlayer, dataset, baseline, clubLabel) {
   if (!window.echarts || !els.radarChart) return;
   if (!state.radarChart) {
@@ -336,7 +374,7 @@ export function renderRadar(player, comparePlayer, dataset, baseline, clubLabel)
   state.radarChart.resize();
 
   const theme = getThemeColors();
-  const metrics = dataset.metrics || [];
+  const metrics = getProfileDisplayMetrics(dataset);
   const indicators = metrics.map((m) => ({
     name: m.label.replace(" / 90", ""),
     min: 0,
@@ -431,6 +469,7 @@ export async function renderPlayerProgression(player, position, season, openToke
   history.sort((a, b) => collator.compare(a.season, b.season));
   if (history.length < 2) {
     els.progressionChart.hidden = true;
+    if (els.dialogProgressionMetric) els.dialogProgressionMetric.hidden = true;
     els.dialogProgressionEmpty.hidden = false;
     els.dialogProgressionEmpty.textContent = history.length ? "One season available for this player." : "No archived progression data.";
     return;
@@ -448,7 +487,24 @@ export async function renderPlayerProgression(player, position, season, openToke
   const theme = getThemeColors();
   const dsForPos = activeDataset();
   const catalog = dsForPos ? getMetricCatalog(dsForPos) : null;
-  const [m1Key, m2Key] = PROGRESSION_AXES[position] || PROGRESSION_AXES.ST;
+  const [def1, def2] = PROGRESSION_AXES[position] || PROGRESSION_AXES.ST;
+
+  if (els.dialogProgressionMetric && catalog) {
+    const prevMetric = els.dialogProgressionMetric.value;
+    els.dialogProgressionMetric.innerHTML = [
+      `<option value="">Position Pair (Default)</option>`,
+      ...catalog.list.map((m) => `<option value="${escapeHtml(m.key)}">${escapeHtml(m.label)}</option>`),
+    ].join("");
+    els.dialogProgressionMetric.value = prevMetric && catalog.byKey.has(prevMetric) ? prevMetric : "";
+    els.dialogProgressionMetric.hidden = false;
+    els.dialogProgressionMetric.onchange = () => {
+      renderPlayerProgression(player, position, season, openToken, loadPositionFn);
+    };
+  }
+
+  const customMetric = els.dialogProgressionMetric?.value || "";
+  const m1Key = customMetric || def1;
+  const m2Key = customMetric ? "" : def2;
   const fallbackLabels = {
     npxg_p90: "np-xG / 90",
     xa_p90: "xA / 90",
@@ -459,7 +515,7 @@ export async function renderPlayerProgression(player, position, season, openToke
     goals_allowed_p90: "Goals Allowed / 90",
   };
   const m1Label = catalog?.byKey.get(m1Key)?.label || fallbackLabels[m1Key] || m1Key;
-  const m2Label = catalog?.byKey.get(m2Key)?.label || fallbackLabels[m2Key] || m2Key;
+  const m2Label = m2Key ? catalog?.byKey.get(m2Key)?.label || fallbackLabels[m2Key] || m2Key : "";
 
   const xLabels = history.map((h) => h.season);
 
@@ -482,10 +538,11 @@ export async function renderPlayerProgression(player, position, season, openToke
           const idx = items[0].dataIndex;
           const item = history[idx];
           const r = item.row;
+          const secondPart = m2Key ? ` · ${escapeHtml(m2Label)}: ${formatStat(m2Key, r[m2Key])}` : "";
           return `
             <strong>${escapeHtml(item.season)}</strong> (${escapeHtml(clubNameOf(r))})<br>
             Mins: ${r.minutes} · Avg Rating: <strong>${Number(r.avg_rating || 0).toFixed(2)}</strong><br>
-            ${escapeHtml(m1Label)}: ${formatStat(m1Key, r[m1Key])} · ${escapeHtml(m2Label)}: ${formatStat(m2Key, r[m2Key])}<br>
+            ${escapeHtml(m1Label)}: ${formatStat(m1Key, r[m1Key])}${secondPart}<br>
             Overall Score: <strong>${Number(r.score_overall || 0).toFixed(1)}</strong>
           `;
         },
@@ -499,7 +556,7 @@ export async function renderPlayerProgression(player, position, season, openToke
       yAxis: [
         {
           type: "value",
-          name: "Per-90",
+          name: customMetric ? m1Label : "Per-90",
           nameTextStyle: { color: theme.muted, fontSize: 10 },
           axisLabel: { color: theme.muted, fontSize: 10 },
           splitLine: { lineStyle: { color: theme.gridLine } },
@@ -524,15 +581,19 @@ export async function renderPlayerProgression(player, position, season, openToke
           itemStyle: { color: theme.accent },
           data: history.map((h) => Number(h.row[m1Key]) || 0),
         },
-        {
-          name: m2Label,
-          type: "line",
-          yAxisIndex: 0,
-          smooth: true,
-          symbolSize: 7,
-          itemStyle: { color: theme.compare },
-          data: history.map((h) => Number(h.row[m2Key]) || 0),
-        },
+        ...(m2Key
+          ? [
+              {
+                name: m2Label,
+                type: "line",
+                yAxisIndex: 0,
+                smooth: true,
+                symbolSize: 7,
+                itemStyle: { color: theme.compare },
+                data: history.map((h) => Number(h.row[m2Key]) || 0),
+              },
+            ]
+          : []),
         {
           name: "Overall Score",
           type: "line",

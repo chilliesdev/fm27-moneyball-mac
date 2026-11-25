@@ -109,6 +109,7 @@ export const PRESETS_KEY = "fm27_moneyball_role_presets_v1";
 export const COLS_KEY = "fm27_moneyball_cols_v1";
 export const SAVED_VIEWS_KEY = "fm27_moneyball_saved_views_v1";
 export const LAST_VIEW_KEY = "fm27_moneyball_last_view_v1";
+export const UI_PREFS_KEY = "fm27_moneyball_ui_prefs_v1";
 
 export const METHOD_HINTS = {
   percentile: "Mid-rank percentile (0–100) within the active baseline pool.",

@@ -12,6 +12,7 @@ import {
   els,
   saveSavedViews,
   saveShortlist,
+  saveUiPrefs,
   seasonEndYear,
   state,
 } from "./modules/state.js";
@@ -23,6 +24,7 @@ import {
   enableLightDismissFallback,
   escapeHtml,
   getThemeColors,
+  isDarkColorScheme,
   normalizeSearchText,
   parsePlayerPositions,
   playerName,
@@ -64,11 +66,18 @@ import {
   filteredShortlist,
   openPlayerDialog,
   openShortlistedPlayer,
+  refreshShortlistDatasets,
   renderShortlist,
   stepPlayerDialog,
   toggleRowShortlist,
+  updateShortlistCompareButton,
 } from "./modules/profile.js";
-import { initOrUpdateTable, renderColumnChooser } from "./modules/table.js";
+import {
+  getTableHeight,
+  initOrUpdateTable,
+  renderColumnChooser,
+  updateCompareSelectedButton,
+} from "./modules/table.js";
 import { wireScoreDialogEvents } from "./modules/scoreDialog.js";
 
 async function loadPosition(pos, season = state.season) {
@@ -171,6 +180,25 @@ async function loadMeta(season = state.season) {
     els.saveSelect.value = state.meta.save_path;
   }
   populateContractOptions();
+  updateTabCounts();
+}
+
+function updateTabCounts() {
+  const counts = state.meta?.positions;
+  if (!counts) return;
+  for (const tab of els.tabs) {
+    const pos = tab.dataset.pos;
+    const info = counts[pos];
+    const badge = tab.querySelector(".tab-count");
+    if (!badge) continue;
+    const n = info?.total_450;
+    if (Number.isFinite(n) && n > 0) {
+      badge.textContent = n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+      badge.hidden = false;
+    } else {
+      badge.hidden = true;
+    }
+  }
 }
 
 function populatePositionControls(dataset) {
@@ -196,6 +224,8 @@ function populatePositionControls(dataset) {
   }
   populateScatterAxes(dataset, samePosition);
 
+  const hadBenchmarkOptions = els.benchmark.options.length > 0;
+  const prevBenchmark = els.benchmark.value;
   const hullInPos = dataset.players.filter((p) => p.is_hull);
   const hullFallback = (state.meta?.hull_squad || []).filter((p) => !hullInPos.some((h) => h.uid === p.uid));
   const clubTag = state.meta?.club_short_name || "CLUB";
@@ -209,12 +239,15 @@ function populatePositionControls(dataset) {
     ),
     ...hullFallback.map(
       (p) =>
-        `<option value="${escapeHtml(p.uid)}">[${escapeHtml(clubTag)}] ${escapeHtml(playerName(p))} (${escapeHtml(
+        `<option value="${escapeHtml(p.uid)}">[${escapeHtml(clubTag)} · other pos] ${escapeHtml(playerName(p))} (${escapeHtml(
           p.positions
         )})</option>`
     ),
   ].join("");
-  if (hullInPos.length > 0) {
+  const hasPrevBenchmark = hadBenchmarkOptions && [...els.benchmark.options].some((o) => o.value === prevBenchmark);
+  if (hasPrevBenchmark) {
+    els.benchmark.value = prevBenchmark;
+  } else if (hullInPos.length > 0) {
     els.benchmark.value = hullInPos[0].uid;
   }
 }
@@ -227,6 +260,7 @@ function closeSearchSuggestions() {
 
 function renderSearchSuggestions() {
   closeSearchSuggestions();
+  if (els.btnClearSearch) els.btnClearSearch.hidden = !els.search.value;
   const query = normalizeSearchText(els.search.value);
   const dataset = activeDataset();
   if (!query || !dataset || document.activeElement !== els.search) return;
@@ -254,13 +288,18 @@ function renderSearchSuggestions() {
       .slice(0, 4).map(([value]) => ({ value, detail: "Club" })),
   ];
   state.searchOptions = suggestions;
-  if (!suggestions.length) return;
+  const loadingIndex = Boolean(index && !index.entries && !index.failed);
+  if (!suggestions.length && !loadingIndex) return;
 
-  els.searchSuggestions.innerHTML = suggestions.map(({ value, detail }, index) => `
+  const rowsHtml = suggestions.map(({ value, detail }, index) => `
     <li id="search-suggestion-${index}" role="option" aria-selected="false" data-index="${index}" data-value="${escapeHtml(value)}">
       <span>${escapeHtml(value)}</span><small>${escapeHtml(detail)}</small>
     </li>
-  `).join("");
+  `);
+  if (loadingIndex) {
+    rowsHtml.push(`<li class="search-loading-note" aria-disabled="true"><small>Loading full player index…</small></li>`);
+  }
+  els.searchSuggestions.innerHTML = rowsHtml.join("");
   const gridBottom = els.search.closest(".filter-grid")?.getBoundingClientRect().bottom ?? window.innerHeight;
   const searchBottom = els.search.getBoundingClientRect().bottom;
   const inGridSpace = gridBottom - searchBottom;
@@ -291,6 +330,11 @@ async function openLookupProfile({ player, groups, hasStats }) {
 
 function wireSearchSuggestions() {
   els.search.addEventListener("input", refreshView);
+  els.btnClearSearch?.addEventListener("click", () => {
+    els.search.value = "";
+    refreshView();
+    els.search.focus();
+  });
   els.search.addEventListener("focus", renderSearchSuggestions);
   els.search.addEventListener("blur", closeSearchSuggestions);
   window.addEventListener("resize", () => {
@@ -327,6 +371,8 @@ function wireSearchSuggestions() {
       if (option) {
         event.preventDefault();
         selectSearchSuggestion(option);
+      } else {
+        closeSearchSuggestions();
       }
     }
   });
@@ -400,12 +446,18 @@ function refreshView() {
   renderSearchSuggestions();
   renderSquadProfiles();
   renderScatter(dataset, openDialog);
+  const eliteNote = Number.isFinite(state.lastScatterEliteCount)
+    ? ` · ${state.lastScatterEliteCount.toLocaleString()} in Elite Quadrant`
+    : "";
+  els.poolSummary.textContent = `${rows.length.toLocaleString()} targets matched${eliteNote} · ${pctMode} · ${clubLabel} highlighted in amber`;
   return initOrUpdateTable(dataset, rows, openDialog);
 }
 
 async function selectPosition(pos, focusTab = false) {
   const request = ++state.positionRequest;
   state.pos = pos;
+  state.selectedCompareUids.clear();
+  updateCompareSelectedButton();
   els.tabs.forEach((t) => {
     const active = t.dataset.pos === pos;
     t.setAttribute("aria-selected", String(active));
@@ -481,6 +533,9 @@ function wireEvents() {
   [els.scatterX, els.scatterY].forEach((el) => {
     el.addEventListener("change", () => {
       syncScatterPresetSelect(state.pos);
+      if (els.scatterX.value && els.scatterX.value === els.scatterY.value) {
+        showToast("X and Y axes are set to the same metric");
+      }
       const dataset = activeDataset();
       if (dataset) renderScatter(dataset, openDialog);
       persistLastViewSnapshot();
@@ -609,8 +664,55 @@ function wireEvents() {
     FACETS.clubs.listbox.children[firstNewIndex]?.focus();
   });
 
-  wirePopoverBehaviors({ onRefresh: refreshView, onOpenColumnChooser: renderColumnChooser });
+  wirePopoverBehaviors({
+    onRefresh: refreshView,
+    onOpenColumnChooser: () => renderColumnChooser(refreshView),
+  });
   wireScoreDialogEvents(refreshView, openDialog);
+
+  if (els.btnTogglePcts) {
+    const syncPctBtn = () => {
+      const hidden = Boolean(state.uiPrefs?.hidePctPills);
+      els.btnTogglePcts.setAttribute("aria-pressed", String(hidden));
+      els.btnTogglePcts.textContent = hidden ? "Show %" : "Hide %";
+    };
+    syncPctBtn();
+    els.btnTogglePcts.addEventListener("click", () => {
+      state.uiPrefs.hidePctPills = !state.uiPrefs.hidePctPills;
+      saveUiPrefs();
+      syncPctBtn();
+      const dataset = activeDataset();
+      if (dataset) initOrUpdateTable(dataset, state.filtered, openDialog);
+    });
+  }
+
+  if (els.btnExpandTable) {
+    const syncExpandBtn = () => {
+      const expanded = Boolean(state.uiPrefs?.tableExpanded);
+      els.btnExpandTable.setAttribute("aria-pressed", String(expanded));
+      els.btnExpandTable.textContent = expanded ? "Fixed Height" : "Expand Table";
+    };
+    syncExpandBtn();
+    els.btnExpandTable.addEventListener("click", () => {
+      state.uiPrefs.tableExpanded = !state.uiPrefs.tableExpanded;
+      saveUiPrefs();
+      syncExpandBtn();
+      state.tabulatorTable?.setHeight?.(getTableHeight());
+    });
+  }
+
+  els.btnCompareSelected?.addEventListener("click", () => {
+    const dataset = activeDataset();
+    if (!dataset) return;
+    const picked = [...state.selectedCompareUids]
+      .map((uid) => dataset.players.find((p) => p.uid === uid))
+      .filter(Boolean);
+    if (picked.length < 2) return;
+    openPlayerDialog(picked[0], dataset, state.season, loadPosition, {
+      compareUid: picked[1].uid,
+      extraComparePlayers: picked.slice(1),
+    });
+  });
 
   document.addEventListener("keydown", (ev) => {
     if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
@@ -673,7 +775,7 @@ function wireEvents() {
 
   els.dialogCopyName.addEventListener("click", () => {
     const player = state.activeProfile?.player;
-    if (player?.name) copyPlayerName(player);
+    if (player?.name) copyPlayerName(player, els.dialogCopyName);
   });
   els.dialogPinCompare?.addEventListener("click", () => {
     const profile = state.activeProfile;
@@ -721,9 +823,56 @@ function wireEvents() {
   els.btnShortlistView.addEventListener("click", () => {
     renderShortlist();
     els.shortlistDialog.showModal();
+    refreshShortlistDatasets(loadPosition);
   });
+  els.shortlistSearch?.addEventListener("input", renderShortlist);
   els.shortlistPosition.addEventListener("change", renderShortlist);
   els.shortlistSort?.addEventListener("change", renderShortlist);
+  els.shortlistBody.addEventListener("change", (event) => {
+    const cb = event.target.closest(".shortlist-compare-cb");
+    if (!cb) return;
+    const uid = cb.dataset.uid;
+    if (!uid) return;
+    if (cb.checked) {
+      if (state.shortlistCompareUids.size >= 4) {
+        cb.checked = false;
+        showToast("Select up to 4 players to compare");
+        return;
+      }
+      state.shortlistCompareUids.add(uid);
+    } else {
+      state.shortlistCompareUids.delete(uid);
+    }
+    updateShortlistCompareButton();
+  });
+  els.btnShortlistCompare?.addEventListener("click", async () => {
+    const picked = [...state.shortlistCompareUids]
+      .map((uid) => state.shortlist[uid])
+      .filter((p) => p && p.pos_group);
+    if (picked.length < 2) return;
+    const primary = picked[0];
+    const samePos = picked.filter((p) => p.pos_group === primary.pos_group);
+    if (samePos.length < 2) {
+      showToast("Select players in the same position group to compare");
+      return;
+    }
+    const dataset = await loadPosition(primary.pos_group, state.season).catch(() => null);
+    if (!dataset) return;
+    const primaryRow = dataset.players.find((r) => r.uid === primary.uid);
+    const extraRows = samePos
+      .slice(1)
+      .map((s) => dataset.players.find((r) => r.uid === s.uid))
+      .filter(Boolean);
+    if (!primaryRow || !extraRows.length) {
+      showToast("Selected players unavailable in current season");
+      return;
+    }
+    els.shortlistDialog.close();
+    openPlayerDialog(primaryRow, dataset, state.season, loadPosition, {
+      compareUid: extraRows[0].uid,
+      extraComparePlayers: extraRows,
+    });
+  });
   els.shortlistBody.addEventListener("input", (event) => {
     const noteInput = event.target.closest(".shortlist-note-input");
     if (!noteInput) return;
@@ -808,8 +957,7 @@ function wireEvents() {
     showToast("Shortlist CSV exported");
   });
 
-  const mq = window.matchMedia("(prefers-color-scheme: dark)");
-  mq.addEventListener("change", () => {
+  const redrawTheme = () => {
     const dataset = activeDataset();
     if (!dataset) return;
     renderScatter(dataset, openDialog);
@@ -821,6 +969,34 @@ function wireEvents() {
       }
     }
     state.tabulatorTable?.redraw(true);
+  };
+
+  const COLOR_SCHEME_KEY = "fm27_moneyball_color_scheme";
+  const mq = window.matchMedia("(prefers-color-scheme: dark)");
+  mq.addEventListener("change", redrawTheme);
+
+  const metaScheme = document.querySelector('meta[name="color-scheme"]');
+  els.btnThemeToggle?.addEventListener("click", () => {
+    const target = isDarkColorScheme() ? "light" : "dark";
+    const systemScheme = mq.matches ? "dark" : "light";
+    if (target === systemScheme) {
+      try {
+        localStorage.removeItem(COLOR_SCHEME_KEY);
+      } catch {}
+      if (metaScheme) metaScheme.content = "light dark";
+    } else {
+      try {
+        localStorage.setItem(COLOR_SCHEME_KEY, target);
+      } catch {}
+      if (metaScheme) metaScheme.content = target;
+    }
+    redrawTheme();
+  });
+
+  window.addEventListener("storage", (ev) => {
+    if (ev.key !== COLOR_SCHEME_KEY || !metaScheme) return;
+    metaScheme.content = ev.newValue === "light" || ev.newValue === "dark" ? ev.newValue : "light dark";
+    redrawTheme();
   });
 }
 
@@ -887,11 +1063,26 @@ async function pollBuildUntilDone(initialStatus) {
   return latest;
 }
 
-async function refreshFromSave(savePath = null) {
+async function refreshFromSave(savePath = null, options = {}) {
+  const background = Boolean(options?.background);
   els.btnRefreshSave.disabled = true;
-  const origText = els.btnRefreshSave.textContent;
-  els.btnRefreshSave.textContent = "Reading .fm save...";
-  els.poolSummary.textContent = "Reading current FM27 save and updating season archive...";
+  els.btnRefreshSave.classList.add("is-loading");
+  const startedAt = Date.now();
+  const updateRefreshLabel = () => {
+    const secs = Math.floor((Date.now() - startedAt) / 1000);
+    const msg = secs > 0 ? `Reading .fm save (${secs}s)...` : "Reading .fm save...";
+    els.btnRefreshSave.textContent = msg;
+    if (background && els.refreshBannerText) {
+      els.refreshBannerText.textContent = `Refreshing FM27 save in background (${secs}s)…`;
+    }
+  };
+  updateRefreshLabel();
+  const timer = setInterval(updateRefreshLabel, 1000);
+  if (background && els.refreshBanner) {
+    els.refreshBanner.hidden = false;
+  } else {
+    els.poolSummary.textContent = "Reading current FM27 save and updating season archive...";
+  }
   try {
     const res = await fetch("/api/refresh", {
       method: "POST",
@@ -913,10 +1104,15 @@ async function refreshFromSave(savePath = null) {
     showToast("Save refreshed");
     return true;
   } catch (err) {
-    els.poolSummary.textContent = `Save refresh failed: ${err.message}`;
+    if (!background) {
+      els.poolSummary.textContent = `Save refresh failed: ${err.message}`;
+    }
     showToast(`Save refresh failed: ${err.message}`);
     return false;
   } finally {
+    clearInterval(timer);
+    if (els.refreshBanner) els.refreshBanner.hidden = true;
+    els.btnRefreshSave.classList.remove("is-loading");
     els.btnRefreshSave.disabled = false;
     els.btnRefreshSave.textContent = els.btnRefreshSave.classList.contains("is-pending")
       ? "Refresh Save •"
@@ -961,25 +1157,31 @@ async function init() {
 
   if (serverStatus) {
     renderServerControls(serverStatus);
+  } else {
+    document.querySelectorAll(".server-only").forEach((el) => {
+      el.hidden = true;
+    });
   }
   wireStaleSaveCheck();
 
   const params = new URLSearchParams(window.location.search);
   const shouldAutoRefresh = params.get("auto_refresh") === "1" && serverStatus?.newest_save_stale;
+  if (params.has("auto_refresh")) {
+    params.delete("auto_refresh");
+    const qs = params.toString();
+    const cleanUrl = `${window.location.pathname}${qs ? `?${qs}` : ""}${window.location.hash}`;
+    window.history.replaceState(null, "", cleanUrl);
+  }
 
   if (els.btnRestoreView && state.lastView && isNonDefaultView(state.lastView) && !shouldAutoRefresh) {
     els.btnRestoreView.hidden = false;
   }
 
+  await loadMeta(state.season);
+  await selectPosition("ST");
+
   if (shouldAutoRefresh) {
-    const ok = await refreshFromSave(serverStatus.saves?.[0]?.path || null);
-    if (!ok) {
-      await loadMeta(state.season);
-      await selectPosition("ST");
-    }
-  } else {
-    await loadMeta(state.season);
-    await selectPosition("ST");
+    refreshFromSave(serverStatus.saves?.[0]?.path || null, { background: true });
   }
 }
 

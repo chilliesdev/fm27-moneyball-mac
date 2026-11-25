@@ -4,10 +4,18 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
+  <script>
+    try {
+      const s = localStorage.getItem("fm27_moneyball_color_scheme");
+      if (s === "light" || s === "dark") {
+        document.querySelector('meta[name="color-scheme"]').content = s;
+      }
+    } catch {}
+  </script>
   <title>FM27 — Moneyball Scout</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='15' fill='%23c46b00'/%3E%3Ctext x='16' y='21' font-size='16' font-weight='bold' text-anchor='middle' fill='white' font-family='sans-serif'%3EM%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="vendor/tabulator/tabulator.min.css">
-  <link rel="stylesheet" href="styles.css?v=5">
+  <link rel="stylesheet" href="styles.css?v=6">
 </head>
 <body>
   <header class="topbar">
@@ -19,37 +27,43 @@
       </div>
     </div>
     <div class="topbar-actions">
-      <label class="top-select">
+      <label class="top-select server-only">
         <span>Season</span>
         <select id="f-season" aria-label="Select archived season"></select>
       </label>
-      <label class="top-select">
+      <label class="top-select server-only">
         <span>Save</span>
         <select id="f-save" aria-label="Select FM27 save file"></select>
       </label>
-      <button type="button" id="btn-refresh-save" class="btn secondary">
+      <button type="button" id="btn-refresh-save" class="btn secondary server-only">
         Refresh Save
       </button>
       <button type="button" id="btn-shortlist-view" class="btn secondary">
         Shortlist (<span id="shortlist-count">0</span>)
       </button>
-      <button type="button" id="btn-export-csv" class="btn primary">
-        Export Filtered CSV
+      <button type="button" id="btn-theme-toggle" class="btn secondary btn-compact theme-toggle" title="Toggle light/dark theme">
+        <span class="theme-opt theme-to-dark"><span aria-hidden="true">🌙</span><span class="sr-only">Switch to dark theme</span></span>
+        <span class="theme-opt theme-to-light"><span aria-hidden="true">☀️</span><span class="sr-only">Switch to light theme</span></span>
       </button>
     </div>
   </header>
 
+  <div id="refresh-banner" class="refresh-banner" role="status" hidden>
+    <span class="refresh-spinner" aria-hidden="true"></span>
+    <span id="refresh-banner-text">Refreshing save in background...</span>
+  </div>
+
   <main class="container">
     <nav class="tabs-bar" aria-label="Position groups">
       <div id="position-tablist" class="tablist" role="tablist" aria-label="Scout positions">
-        <button type="button" role="tab" id="tab-ST" data-pos="ST" aria-selected="true" tabindex="0">ST</button>
-        <button type="button" role="tab" id="tab-W" data-pos="W" aria-selected="false" tabindex="-1">W / Wide</button>
-        <button type="button" role="tab" id="tab-AM" data-pos="AM" aria-selected="false" tabindex="-1">AM</button>
-        <button type="button" role="tab" id="tab-CM" data-pos="CM" aria-selected="false" tabindex="-1">CM</button>
-        <button type="button" role="tab" id="tab-DM" data-pos="DM" aria-selected="false" tabindex="-1">DM</button>
-        <button type="button" role="tab" id="tab-FB_WB" data-pos="FB_WB" aria-selected="false" tabindex="-1">FB / WB</button>
-        <button type="button" role="tab" id="tab-CB" data-pos="CB" aria-selected="false" tabindex="-1">CB</button>
-        <button type="button" role="tab" id="tab-GK" data-pos="GK" aria-selected="false" tabindex="-1">GK</button>
+        <button type="button" role="tab" id="tab-ST" data-pos="ST" aria-selected="true" tabindex="0"><span class="tab-label">ST</span><span class="tab-count" hidden></span></button>
+        <button type="button" role="tab" id="tab-W" data-pos="W" aria-selected="false" tabindex="-1"><span class="tab-label">W / Wide</span><span class="tab-count" hidden></span></button>
+        <button type="button" role="tab" id="tab-AM" data-pos="AM" aria-selected="false" tabindex="-1"><span class="tab-label">AM</span><span class="tab-count" hidden></span></button>
+        <button type="button" role="tab" id="tab-CM" data-pos="CM" aria-selected="false" tabindex="-1"><span class="tab-label">CM</span><span class="tab-count" hidden></span></button>
+        <button type="button" role="tab" id="tab-DM" data-pos="DM" aria-selected="false" tabindex="-1"><span class="tab-label">DM</span><span class="tab-count" hidden></span></button>
+        <button type="button" role="tab" id="tab-FB_WB" data-pos="FB_WB" aria-selected="false" tabindex="-1"><span class="tab-label">FB / WB</span><span class="tab-count" hidden></span></button>
+        <button type="button" role="tab" id="tab-CB" data-pos="CB" aria-selected="false" tabindex="-1"><span class="tab-label">CB</span><span class="tab-count" hidden></span></button>
+        <button type="button" role="tab" id="tab-GK" data-pos="GK" aria-selected="false" tabindex="-1"><span class="tab-label">GK</span><span class="tab-count" hidden></span></button>
       </div>
     </nav>
 
@@ -61,7 +75,7 @@
             <span>Filters</span>
           </button>
           <span id="filter-toggle-meta" class="subtitle"></span>
-          <button type="button" id="btn-clear-defaults" class="btn-link" hidden>Clear Defaults</button>
+          <button type="button" id="btn-clear-defaults" class="btn-link" hidden title="Remove default age, value, and reputation caps">Relax Default Caps</button>
         </div>
         <div class="filters-header-actions">
           <button type="button" id="btn-restore-view" class="btn secondary btn-compact" hidden>Restore Last View</button>
@@ -71,16 +85,61 @@
               <option value="">— Saved Views —</option>
             </select>
           </label>
-          <input type="text" id="f-view-name" class="view-name-input" placeholder="View name (optional)" aria-label="Custom view name">
-          <button type="button" id="btn-save-view" class="btn secondary btn-compact" title="Save current filters and axes as a view">Save View</button>
-          <button type="button" id="btn-delete-view" class="btn secondary btn-compact" title="Delete selected view" disabled>Delete</button>
+          <button type="button" id="btn-views-menu" class="btn secondary btn-compact" popovertarget="pop-saved-views" aria-expanded="false" aria-controls="pop-saved-views">
+            Manage Views
+          </button>
+          <div id="pop-saved-views" popover="auto" class="filter-popover saved-views-popover" data-anchor="btn-views-menu">
+            <div class="popover-actions">
+              <span class="popover-hint">Save or delete view</span>
+              <button type="button" class="btn-link" popovertarget="pop-saved-views" popovertargetaction="hide">Close</button>
+            </div>
+            <div class="saved-views-body">
+              <label class="field">
+                <span>View Name</span>
+                <input type="text" id="f-view-name" class="view-name-input" placeholder="View name (optional)" aria-label="Custom view name">
+              </label>
+              <div class="saved-views-btns">
+                <button type="button" id="btn-save-view" class="btn primary btn-compact" title="Save current filters and axes as a view">Save View</button>
+                <button type="button" id="btn-delete-view" class="btn secondary btn-compact" title="Delete selected view" disabled>Delete Selected</button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
+
+      <div class="scoring-bar" aria-label="Role scoring and benchmark settings">
+        <div class="field scoring-role-field">
+          <span>Role Score</span>
+          <div class="role-select-row">
+            <select id="f-role" aria-label="Role Score"></select>
+            <button type="button" id="btn-customize-score" class="btn secondary btn-compact" title="Customize Role Score formula">Customize</button>
+          </div>
+        </div>
+
+        <div class="field scoring-benchmark-field">
+          <span>Benchmark Player</span>
+          <select id="f-benchmark" aria-label="Club Benchmark" title="Highlighted on scatter plot and pre-selected in player radar comparisons"></select>
+        </div>
+
+        <label class="field checkbox-field">
+          <input type="checkbox" id="f-dynamic-pct" checked>
+          <span>Dynamic pool percentiles</span>
+        </label>
+
+        <label class="field checkbox-field" title="Keep managed club players (300+ mins) visible regardless of age, value, wage, contract, or reputation filters">
+          <input type="checkbox" id="f-include-hull" checked>
+          <span>Include managed club</span>
+        </label>
+      </div>
+
       <div id="filter-grid" class="filter-grid">
         <div class="field search-field">
-          <label for="f-search">Search Player / Club <kbd class="kbd-hint" aria-hidden="true">/</kbd></label>
-          <input type="search" id="f-search" placeholder="Name or club..." autocomplete="off" role="combobox"
-                 aria-autocomplete="list" aria-controls="search-suggestions" aria-expanded="false" aria-keyshortcuts="/">
+          <label for="f-search">Search <kbd class="kbd-hint" aria-hidden="true">/</kbd></label>
+          <div class="search-input-wrap">
+            <input type="search" id="f-search" placeholder="Name, club, pos, league, nation..." autocomplete="off" role="combobox"
+                   aria-autocomplete="list" aria-controls="search-suggestions" aria-expanded="false" aria-keyshortcuts="/">
+            <button type="button" id="btn-clear-search" class="search-clear-btn" aria-label="Clear search" hidden>×</button>
+          </div>
           <ul id="search-suggestions" class="search-suggestions" role="listbox" aria-label="Search suggestions" hidden></ul>
         </div>
 
@@ -96,7 +155,10 @@
             </div>
             <div class="popover-actions">
               <span class="popover-hint">Matching players</span>
-              <button type="button" class="btn-link" data-action="clear-facet" data-facet="leagues">Clear</button>
+              <div class="popover-action-btns">
+                <button type="button" class="btn-link" data-action="clear-facet" data-facet="leagues">Clear</button>
+                <button type="button" class="btn-link" popovertarget="pop-leagues" popovertargetaction="hide">Done</button>
+              </div>
             </div>
             <div id="list-leagues" class="popover-list" role="listbox" aria-multiselectable="true" aria-label="Leagues"></div>
           </div>
@@ -114,7 +176,10 @@
             </div>
             <div class="popover-actions">
               <span class="popover-hint" id="clubs-scope-hint">All leagues</span>
-              <button type="button" class="btn-link" data-action="clear-facet" data-facet="clubs">Clear</button>
+              <div class="popover-action-btns">
+                <button type="button" class="btn-link" data-action="clear-facet" data-facet="clubs">Clear</button>
+                <button type="button" class="btn-link" popovertarget="pop-clubs" popovertargetaction="hide">Done</button>
+              </div>
             </div>
             <div id="list-clubs" class="popover-list" role="listbox" aria-multiselectable="true" aria-label="Clubs"></div>
             <div id="club-list-footer" class="popover-actions" hidden>
@@ -133,7 +198,10 @@
           <div id="pop-positions" popover="auto" class="filter-popover" data-facet="positions" data-anchor="btn-f-positions">
             <div class="popover-actions">
               <span class="popover-hint">Matches any selected</span>
-              <button type="button" class="btn-link" data-action="clear-facet" data-facet="positions">Clear</button>
+              <div class="popover-action-btns">
+                <button type="button" class="btn-link" data-action="clear-facet" data-facet="positions">Clear</button>
+                <button type="button" class="btn-link" popovertarget="pop-positions" popovertargetaction="hide">Done</button>
+              </div>
             </div>
             <div id="list-positions" class="popover-list" role="listbox" aria-multiselectable="true" aria-label="Positions"></div>
           </div>
@@ -151,7 +219,10 @@
             </div>
             <div class="popover-actions">
               <span class="popover-hint">Multi-select</span>
-              <button type="button" class="btn-link" data-action="clear-facet" data-facet="nations">Clear</button>
+              <div class="popover-action-btns">
+                <button type="button" class="btn-link" data-action="clear-facet" data-facet="nations">Clear</button>
+                <button type="button" class="btn-link" popovertarget="pop-nations" popovertargetaction="hide">Done</button>
+              </div>
             </div>
             <div id="list-nations" class="popover-list" role="listbox" aria-multiselectable="true" aria-label="Nationality"></div>
           </div>
@@ -166,7 +237,10 @@
           <div id="pop-feet" popover="auto" class="filter-popover" data-facet="feet" data-anchor="btn-f-feet">
             <div class="popover-actions">
               <span class="popover-hint">Multi-select</span>
-              <button type="button" class="btn-link" data-action="clear-facet" data-facet="feet">Clear</button>
+              <div class="popover-action-btns">
+                <button type="button" class="btn-link" data-action="clear-facet" data-facet="feet">Clear</button>
+                <button type="button" class="btn-link" popovertarget="pop-feet" popovertargetaction="hide">Done</button>
+              </div>
             </div>
             <div id="list-feet" class="popover-list" role="listbox" aria-multiselectable="true" aria-label="Preferred Foot"></div>
           </div>
@@ -181,7 +255,10 @@
           <div id="pop-statuses" popover="auto" class="filter-popover" data-facet="statuses" data-anchor="btn-f-statuses">
             <div class="popover-actions">
               <span class="popover-hint">Matches any selected</span>
-              <button type="button" class="btn-link" data-action="clear-facet" data-facet="statuses">Clear</button>
+              <div class="popover-action-btns">
+                <button type="button" class="btn-link" data-action="clear-facet" data-facet="statuses">Clear</button>
+                <button type="button" class="btn-link" popovertarget="pop-statuses" popovertargetaction="hide">Done</button>
+              </div>
             </div>
             <div id="list-statuses" class="popover-list" role="listbox" aria-multiselectable="true" aria-label="Status"></div>
           </div>
@@ -190,6 +267,8 @@
         <label class="field">
           <span>Min Minutes</span>
           <select id="f-min-mins">
+            <option value="0">All Mins</option>
+            <option value="300">300+</option>
             <option value="450">450+</option>
             <option value="600">600+</option>
             <option value="900" selected>900+ (Recommended)</option>
@@ -201,7 +280,7 @@
 
         <label class="field">
           <span>Min Age</span>
-          <input type="number" id="f-min-age" min="0" step="1" placeholder="Any age">
+          <input type="number" id="f-min-age" min="0" max="60" step="1" list="dl-min-age" placeholder="Any age">
         </label>
 
         <label class="field">
@@ -209,33 +288,22 @@
           <select id="f-max-age">
             <option value="99">Any Age</option>
             <option value="21">U21 (&le; 21)</option>
+            <option value="22">&le; 22</option>
             <option value="23">U23 (&le; 23)</option>
             <option value="24">&le; 24</option>
             <option value="25" selected>&le; 25</option>
             <option value="26">&le; 26</option>
             <option value="27">&le; 27</option>
             <option value="28">&le; 28</option>
+            <option value="29">&le; 29</option>
             <option value="30">&le; 30</option>
+            <option value="32">&le; 32</option>
           </select>
         </label>
 
         <label class="field">
           <span>Min Transfer Value (£)</span>
-          <select id="f-min-val">
-            <option value="" selected>Any Value</option>
-            <option value="500000">&ge; 500k</option>
-            <option value="1000000">&ge; 1M</option>
-            <option value="2000000">&ge; 2M</option>
-            <option value="3000000">&ge; 3M</option>
-            <option value="5000000">&ge; 5M</option>
-            <option value="7500000">&ge; 7.5M</option>
-            <option value="10000000">&ge; 10M</option>
-            <option value="15000000">&ge; 15M</option>
-            <option value="20000000">&ge; 20M</option>
-            <option value="25000000">&ge; 25M</option>
-            <option value="35000000">&ge; 35M</option>
-            <option value="50000000">&ge; 50M</option>
-          </select>
+          <input type="number" id="f-min-val" min="0" step="any" list="dl-min-val" placeholder="Any value">
         </label>
 
         <label class="field">
@@ -255,22 +323,13 @@
             <option value="50000000">&le; 50M</option>
             <option value="75000000">&le; 75M</option>
             <option value="100000000">&le; 100M</option>
+            <option value="150000000">&le; 150M</option>
           </select>
         </label>
 
         <label class="field">
           <span>Min Weekly Wage (£)</span>
-          <select id="f-min-wage">
-            <option value="" selected>Any Wage</option>
-            <option value="1000">&ge; 1k/wk</option>
-            <option value="5000">&ge; 5k/wk</option>
-            <option value="10000">&ge; 10k/wk</option>
-            <option value="15000">&ge; 15k/wk</option>
-            <option value="20000">&ge; 20k/wk</option>
-            <option value="30000">&ge; 30k/wk</option>
-            <option value="50000">&ge; 50k/wk</option>
-            <option value="80000">&ge; 80k/wk</option>
-          </select>
+          <input type="number" id="f-min-wage" min="0" step="any" list="dl-min-wage" placeholder="Any wage">
         </label>
 
         <label class="field">
@@ -287,6 +346,9 @@
             <option value="65000">&le; 65k/wk</option>
             <option value="80000">&le; 80k/wk</option>
             <option value="100000">&le; 100k/wk</option>
+            <option value="150000">&le; 150k/wk</option>
+            <option value="250000">&le; 250k/wk</option>
+            <option value="500000">&le; 500k/wk</option>
           </select>
         </label>
 
@@ -307,30 +369,28 @@
             <option value="7500">7,500+ (Elite)</option>
           </select>
         </label>
-
-        <div class="field">
-          <span>Role Score</span>
-          <div class="role-select-row">
-            <select id="f-role" aria-label="Role Score"></select>
-            <button type="button" id="btn-customize-score" class="btn secondary btn-compact" title="Customize Role Score formula">Customize</button>
-          </div>
-        </div>
-
-        <label class="field">
-          <span>Club Benchmark</span>
-          <select id="f-benchmark"></select>
-        </label>
-
-        <label class="field checkbox-field">
-          <input type="checkbox" id="f-dynamic-pct" checked>
-          <span>Dynamic pool percentiles</span>
-        </label>
-
-        <label class="field checkbox-field">
-          <input type="checkbox" id="f-include-hull" checked>
-          <span>Include managed club</span>
-        </label>
       </div>
+
+      <datalist id="dl-min-age">
+        <option value="18"></option>
+        <option value="20"></option>
+        <option value="21"></option>
+        <option value="23"></option>
+      </datalist>
+      <datalist id="dl-min-val">
+        <option value="500000" label="£500k"></option>
+        <option value="1000000" label="£1M"></option>
+        <option value="5000000" label="£5M"></option>
+        <option value="10000000" label="£10M"></option>
+        <option value="25000000" label="£25M"></option>
+      </datalist>
+      <datalist id="dl-min-wage">
+        <option value="1000" label="£1k/wk"></option>
+        <option value="5000" label="£5k/wk"></option>
+        <option value="15000" label="£15k/wk"></option>
+        <option value="30000" label="£30k/wk"></option>
+        <option value="50000" label="£50k/wk"></option>
+      </datalist>
 
       <div id="filter-warning" class="filter-warning" role="alert" hidden></div>
 
@@ -350,6 +410,7 @@
           <div>
             <h2>Per-90 Scatter Plot</h2>
             <p class="scatter-note" id="pool-summary">Loading dataset...</p>
+            <p class="scatter-hint subtitle">Click dot for profile · Click legend to toggle series · Ctrl + scroll or Box Zoom to zoom</p>
           </div>
         </div>
         <div class="scatter-controls">
@@ -381,8 +442,12 @@
           <p class="subtitle" id="table-count-note">Hold Shift + click column headers for multi-column sort</p>
         </div>
         <div class="table-toolbar-actions">
+          <button type="button" id="btn-compare-selected" class="btn secondary btn-compact" hidden>Compare (<span id="compare-selected-count">0</span>)</button>
+          <button type="button" id="btn-toggle-pcts" class="btn secondary btn-compact" aria-pressed="false" title="Toggle percentile badges in metric cells">Hide %</button>
+          <button type="button" id="btn-expand-table" class="btn secondary btn-compact" aria-pressed="false" title="Expand table height to reduce nested scrolling">Expand Table</button>
           <button type="button" id="btn-column-chooser" class="btn secondary btn-compact" popovertarget="column-chooser-popover" aria-haspopup="true" aria-expanded="false" aria-controls="column-chooser-popover">Columns</button>
           <div id="column-chooser-popover" class="filter-popover column-chooser-popover" popover="auto" data-anchor="btn-column-chooser" aria-label="Choose table columns"></div>
+          <button type="button" id="btn-export-csv" class="btn primary btn-compact">Export Filtered CSV</button>
         </div>
       </div>
       <div id="sort-status" role="status" class="sr-only"></div>
@@ -402,7 +467,10 @@
         <div class="dialog-brand">
           <img id="dialog-player-img" class="dialog-avatar" src="/api/img/person/?name=?" alt="" width="44" height="44" decoding="async">
           <div>
-            <h2 id="dialog-player-name">Player Name</h2>
+            <div class="dialog-name-row">
+              <h2 id="dialog-player-name">Player Name</h2>
+              <span id="dialog-score-pill" class="pct-pill" hidden></span>
+            </div>
             <p class="dialog-meta-row">
               <img id="dialog-club-img" class="dialog-crest" src="/api/img/club/?name=?" alt="" width="20" height="20" decoding="async">
               <span id="dialog-player-meta" class="subtitle"></span>
@@ -420,31 +488,49 @@
         </div>
       </header>
       <div class="dialog-body">
-        <section aria-labelledby="dialog-profile-heading">
-          <h3 id="dialog-profile-heading">Player Profile</h3>
-          <dl id="dialog-profile-facts" class="profile-facts"></dl>
-        </section>
-        <section aria-labelledby="dialog-season-heading">
-          <h3 id="dialog-season-heading">League Season Stats</h3>
-          <p id="dialog-season-empty" class="subtitle" hidden>No league stats recorded for this season.</p>
-          <dl id="dialog-season-stats" class="profile-facts"></dl>
-        </section>
-        <div id="dialog-radar-panel" class="radar-panel">
-          <div class="radar-controls">
-            <label>
-              <span>Compare Player</span>
-              <select id="dialog-compare-select"></select>
-            </label>
-          </div>
-          <div id="radar-chart" class="radar-chart" role="img" aria-label="Player percentile radar chart"></div>
+        <div class="dialog-col-left">
+          <section aria-labelledby="dialog-profile-heading">
+            <h3 id="dialog-profile-heading">Player Profile</h3>
+            <dl id="dialog-profile-facts" class="profile-facts"></dl>
+          </section>
+          <section id="dialog-roles-section" aria-labelledby="dialog-roles-heading" hidden>
+            <h3 id="dialog-roles-heading">Role Fit Breakdown</h3>
+            <dl id="dialog-role-scores" class="profile-facts"></dl>
+          </section>
+          <section aria-labelledby="dialog-season-heading">
+            <h3 id="dialog-season-heading">League Season Stats</h3>
+            <p id="dialog-season-empty" class="subtitle" hidden>No league stats recorded for this season.</p>
+            <dl id="dialog-season-stats" class="profile-facts"></dl>
+          </section>
         </div>
-        <div id="dialog-profile-metrics" class="profile-metrics">
-          <h3>Per-90 Output &amp; Percentiles</h3>
-          <div id="dialog-stats-list" class="stats-grid"></div>
-          <div id="dialog-progression-wrap">
-            <h3 class="progression-heading">Season-by-Season Progression</h3>
-            <p id="dialog-progression-empty" class="subtitle" hidden></p>
-            <div id="progression-chart" class="progression-chart" role="img" aria-label="Season progression chart" hidden></div>
+        <div class="dialog-col-right">
+          <div id="dialog-radar-panel" class="radar-panel">
+            <div class="radar-controls">
+              <label>
+                <span>Compare Player</span>
+                <select id="dialog-compare-select"></select>
+              </label>
+              <label class="radar-compare-search-field">
+                <span>Find Any Player</span>
+                <input type="search" id="dialog-compare-search" placeholder="Search player in position..." autocomplete="off">
+              </label>
+            </div>
+            <div id="radar-chart" class="radar-chart" role="img" aria-label="Player percentile radar chart"></div>
+          </div>
+          <div id="dialog-profile-metrics" class="profile-metrics">
+            <div class="profile-metrics-head">
+              <h3>Per-90 Output &amp; Percentiles</h3>
+              <span id="dialog-compare-legend" class="subtitle" hidden></span>
+            </div>
+            <div id="dialog-stats-list" class="stats-grid"></div>
+            <div id="dialog-progression-wrap">
+              <div class="progression-head-row">
+                <h3 class="progression-heading">Season-by-Season Progression</h3>
+                <select id="dialog-progression-metric" class="progression-metric-select" aria-label="Progression metric" hidden></select>
+              </div>
+              <p id="dialog-progression-empty" class="subtitle" hidden></p>
+              <div id="progression-chart" class="progression-chart" role="img" aria-label="Season progression chart" hidden></div>
+            </div>
           </div>
         </div>
       </div>
@@ -455,11 +541,15 @@
     <div class="dialog-shell score-dialog-shell">
       <header class="dialog-head">
         <div>
-          <h2 id="score-dialog-title">Customize Role Score</h2>
+          <div class="dialog-name-row">
+            <h2 id="score-dialog-title">Customize Role Score</h2>
+            <span id="score-unsaved-badge" class="score-default-tag" hidden>Unsaved Draft</span>
+          </div>
           <p id="score-dialog-subtitle" class="subtitle">Build weighted custom formulas from position defaults or the full metric catalog.</p>
         </div>
         <div class="dialog-head-actions">
           <button type="button" id="score-reset-btn" class="btn secondary">Reset to Role</button>
+          <button type="button" id="score-cancel-btn" class="btn secondary">Cancel</button>
           <button type="button" id="score-close-btn" class="btn primary">Done</button>
         </div>
       </header>
@@ -485,8 +575,8 @@
             <input type="text" id="score-preset-name" placeholder="e.g. Pressing Forward...">
           </label>
           <div class="score-preset-btns">
-            <button type="button" id="score-save-preset-btn" class="btn primary btn-compact">Save Preset</button>
-            <button type="button" id="score-update-preset-btn" class="btn secondary btn-compact" disabled>Update</button>
+            <button type="button" id="score-save-preset-btn" class="btn primary btn-compact">Save As New</button>
+            <button type="button" id="score-update-preset-btn" class="btn secondary btn-compact" disabled>Update Selected</button>
             <button type="button" id="score-rename-preset-btn" class="btn secondary btn-compact" disabled>Rename</button>
             <button type="button" id="score-delete-preset-btn" class="btn secondary btn-compact" disabled>Delete</button>
           </div>
@@ -526,6 +616,7 @@
       <header class="dialog-head">
         <h2 id="shortlist-dialog-title">Saved Shortlist</h2>
         <div class="dialog-head-actions">
+          <button type="button" id="btn-shortlist-compare" class="btn secondary" hidden>Compare Selected (0)</button>
           <button type="button" id="btn-export-shortlist" class="btn primary">Export Shortlist CSV</button>
           <button type="button" id="btn-clear-shortlist" class="btn secondary">Clear Shortlist</button>
           <button type="button" id="shortlist-close-btn" class="btn secondary">Close</button>
@@ -533,6 +624,10 @@
       </header>
       <div class="shortlist-body">
         <div class="shortlist-controls">
+          <label class="field shortlist-filter shortlist-search-field">
+            <span>Search</span>
+            <input type="search" id="shortlist-search" placeholder="Name, club, or note...">
+          </label>
           <label class="field shortlist-filter">
             <span>Position</span>
             <select id="shortlist-position"><option value="">All Positions</option></select>
@@ -557,6 +652,6 @@
 
   <script src="vendor/echarts/echarts.min.js"></script>
   <script src="vendor/tabulator/tabulator.min.js"></script>
-  <script type="module" src="app.js?v=6"></script>
+  <script type="module" src="app.js?v=7"></script>
 </body>
 </html>
